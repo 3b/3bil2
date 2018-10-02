@@ -52,7 +52,7 @@
 
 (defun java-type-string-for-class (class)
   (etypecase class
-    ((eql fixnum)
+    ((or (signed-byte 32) (eql fixnum))
      "I")
     ((eql :void)
      "V")
@@ -61,10 +61,26 @@
        (setf class (gethash class (native-classes *compile-env*))))
      (format nil "L~a;" (java-name class)))))
 
+(defun constant-assignment-p (ir)
+  ;; fixme: probably should work with NIL literal too
+  (when (and (typep ir 'cleavir-ir:assignment-instruction)
+             (typep (car (cleavir-ir:inputs ir))
+                    'cleavir-ir:load-time-value-input))
+    (let ((f (cleavir-ir:form (car (cleavir-ir:inputs ir)))))
+      (if (typep f '(cons (eql quote)))
+          (second f)
+          f))))
+
 (defun java-type-string-for-variable (var)
   (etypecase var
     (cleavir-ir:lexical-location
      (let ((c (car (gethash var *variable-type-info*))))
+       (when (and (not c)
+                  (= 1 (length (cleavir-ir:defining-instructions var)))
+                  (constant-assignment-p
+                   (car (cleavir-ir:defining-instructions var))))
+         (setf c (constant-assignment-p
+                  (car (cleavir-ir:defining-instructions var)))))
        (format t "var ~s -> ~s~%" var c)
        (java-type-string-for-class c)))))
 
