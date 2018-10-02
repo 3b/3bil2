@@ -117,7 +117,9 @@
          (super-name (extends class))
          (super (when super-name
                   (gethash super-name (native-classes *compile-env*))))
-         (name (native-call-name ir))
+         (name (if (typep (native-call-name ir) 'cst:cst)
+                   (cst:raw (native-call-name ir))
+                   (native-call-name ir)))
          (method (gethash name (native-methods *compile-env*))))
     (assert (= 1 (length (gethash this *variable-type-info*))))
     (assert class)

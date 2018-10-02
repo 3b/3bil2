@@ -4,7 +4,8 @@
   :author "Bart Botta <00003b at gmail.com>"
   :depends-on ("3b-dex"
                "3bil2/env"
-               "3bil2-ffigen")
+               "3bil2-ffigen"
+               "cleavir-cst-to-ast")
   :serial t
   :components ((:file "ir")
                (:file "codegen")))

@@ -35,6 +35,15 @@
   (assert (zerop (length (rest form))))
   (cleavir-ast:make-values-ast nil))
 
+(defmethod cleavir-cst-to-ast:convert-special ((head (eql 'values))
+                                               cst
+                                               env
+                                               (system 3bil2))
+  (assert (zerop (length (cst:raw (cst:rest cst)))))
+  (cleavir-ast:make-values-ast nil))
+
+
+
 (defmethod cleavir-generate-ast:check-special-form-syntax ((head (eql 'values))
                                                            form)
   (cleavir-code-utilities:check-form-proper-list form))
@@ -98,6 +107,28 @@
                          env system)))
     (make-instance 'native-call-ast
                    :name (car form)
+                   :call-type (if super
+                                  :invoke-super
+                                  :invoke-virtual)
+                   :class :todo
+                   :argument-asts argument-asts)))
+
+(defmethod cleavir-cst-to-ast::convert-cst
+    (cst
+     (info 3bil2::native-method-function-info)
+     env (system 3bil2))
+  (let* ((.this (cst:second cst))
+         (super (and (cst:consp .this)
+                     (eql 'super (cst:raw (cst:first .this)))))
+         (this (if super
+                   (cst:second .this)
+                   .this))
+         (args (cst:rest (cst:rest cst)))
+         (argument-asts (cleavir-cst-to-ast::convert-sequence
+                         (cst:cons this args)
+                         env system)))
+    (make-instance 'native-call-ast
+                   :name (cst:first cst)
                    :call-type (if super
                                   :invoke-super
                                   :invoke-virtual)
