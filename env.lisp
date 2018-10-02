@@ -21,7 +21,8 @@
 
 (defun define-constant (name value)
   (when (nth-value 1 (gethash name (constants *3bil2-environment*)))
-    (unless (eql value (gethash name (constants *3bil2-environment*)))
+    ;; fixme: handle constants properly
+    #++(unless (eql value (gethash name (constants *3bil2-environment*)))
       (format t "~&!!!!! redefining constant ~s from ~s to ~s!~%"
               name (gethash name (constants *3bil2-environment*)) value)))
   (setf (gethash name (constants *3bil2-environment*))
