@@ -8,7 +8,9 @@
                "cleavir-cst-to-ast")
   :serial t
   :components ((:file "ir")
-               (:file "codegen")))
+               (:file "codegen")
+               (:file "compile")
+               (:file "macros")))
 
 (defsystem :3bil2/env
   ;; separate since ffi defs depend on it to load ffi, and codegen etc

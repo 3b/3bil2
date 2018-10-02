@@ -2,6 +2,12 @@
 
 (defvar *cons-type* "cc.3bb.3bil2.%impl.cons")
 
+(defun ensure-cst (form &key progn)
+  (if (typep form 'cst:cst)
+      form
+      (cst:cst-from-expression (if (and progn (consp form))
+                                   (cons 'progn form)
+                                   form))))
 
 (defclass native-call-ast (cleavir-ast:ast)
   ((name :initarg :name :reader native-call-name)
