@@ -3,7 +3,16 @@
   :license "MIT"
   :author "Bart Botta <00003b at gmail.com>"
   :depends-on ("3b-dex"
-               "sicl-simple-environment"
+               "3bil2/env"
+               "3bil2-ffigen")
+  :serial t
+  :components ((:file "ir")
+               (:file "codegen")))
+
+(defsystem :3bil2/env
+  ;; separate since ffi defs depend on it to load ffi, and codegen etc
+  ;; wants to look at symbols created by ffi
+  :depends-on ("sicl-simple-environment"
                "cleavir-generate-ast"
                "cleavir-ir"
                "cleavir-compilation-policy"
@@ -18,6 +27,4 @@
   :serial t
   :components ((:file "package")
                (:file "system")
-               (:file "env")
-               (:file "ir")
-               (:file "codegen")))
+               (:file "env")))
