@@ -6,15 +6,15 @@
  '(progn
    (defclass-native hello-activity (android/app:activity)
     ())
-   (defmethod-native java/lang/object:<init> ((this hello-activity))
+   (defmethod-native java/lang/object:<init> :public ((this hello-activity))
     (declare (values))
     (call-next-method)
     (values))
 
-   (defmethod-native android/app/activity:on-create ((this hello-activity)
-                                                     (saved-instance-state
-                                                      android/os:bundle))
+   (defmethod-native android/app/activity:on-create
+    :public ((this hello-activity) (saved-instance-state android/os:bundle))
     (declare (values))
     (call-next-method)
     (android/app/activity:set-content-view this 2130903040)
     (values))))
+(defmethod)

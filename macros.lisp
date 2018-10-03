@@ -22,7 +22,7 @@
   (let ((ex (cst:parse-macro *3bil2-system*
                              name
                              (ensure-cst lambda-list)
-                             body
+                             (cons 'progn body)
                              *3bil2-environment*)))
 
     `(progn
@@ -59,29 +59,34 @@
            :name name)))
   nil)
 
-(defmacro/3bil2 defmethod-native (name lambda-list &body body)
+(defmacro/3bil2 defmethod-native (name &rest args)
   ;; we do all work at macroexpansion time and return NIL since
   ;; everything this does needs to be compiled into the .dex file.
   ;; slightly messier than defclass case, since we actually need to
   ;; compile the body... need to rethink APIs a bit...
-  (format t "~&defmethod-native ~s ~s~%" name lambda-list)
-  (unless (every 'consp lambda-list)
-    (error "you need to specify types for all arguments to native method for now...~% (got ~s )" lambda-list))
-  (let ((code (compile-toplevel-1
-               (print
-                `(function
-                  (lambda ,(mapcar 'first lambda-list)
-                   (declare ,@ (loop for (name type) in lambda-list
-                                     collect (list 'type type name)))
-                   (macrolet
-                       ((call-next-method (&rest a)
-                          `(,',name
-                            (super ,',(first (first lambda-list)))
-                            ,@(or (cdr a)
-                                  ',(loop for (name nil)
-                                            in (cdr lambda-list)
-                                          collect name)))))
-                     ,@body)))))))
-    ;; todo: store the generated code somewhere...
-    (format t "~&method body =>~%  ~s~%" code))
-  nil)
+  (let ((visibility (if (listp (car args))
+                        :private
+                        (pop args)))
+        (lambda-list (pop args))
+        (body args))
+    (format t "~&defmethod-native ~s ~s ~s~%" name visibility lambda-list)
+    (unless (every 'consp lambda-list)
+      (error "you need to specify types for all arguments to native method for now...~% (got ~s )" lambda-list))
+    (let ((code (compile-toplevel-1
+                 (print
+                  `(function
+                    (lambda ,(mapcar 'first lambda-list)
+                     (declare ,@ (loop for (name type) in lambda-list
+                                       collect (list 'type type name)))
+                     (macrolet
+                         ((call-next-method (&rest a)
+                            `(,',name
+                              (super ,',(first (first lambda-list)))
+                              ,@(or (cdr a)
+                                    ',(loop for (name nil)
+                                              in (cdr lambda-list)
+                                            collect name)))))
+                       ,@body)))))))
+      ;; todo: store the generated code somewhere...
+      (format t "~&method body =>~%  ~s~%" code))
+    nil))
