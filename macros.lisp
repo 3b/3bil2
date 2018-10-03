@@ -1,20 +1,21 @@
 (in-package 3bil2)
 
-(defmethod cst::destructure-parameter-groups
-    ((client 3bil2) (parameter-groups cl:null)
-     argument-variable tail-variable body)
-  `(let ((,tail-variable ,argument-variable))
-     (declare (ignorable ,tail-variable)
-              ;; turn sbcl compiler notes back on for user code
-              #+sbcl (sb-ext:unmuffle-conditions sb-ext:compiler-note))
-     ,@body))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defmethod cst::destructure-parameter-groups
+      ((client 3bil2) (parameter-groups cl:null)
+       argument-variable tail-variable body)
+    `(let ((,tail-variable ,argument-variable))
+       (declare (ignorable ,tail-variable)
+                ;; turn sbcl compiler notes back on for user code
+                #+sbcl (sb-ext:unmuffle-conditions sb-ext:compiler-note))
+       ,body))
 
-(defmethod cst::destructure-lambda-list
-    ((client 3bil2) ll
-     argument-variable tail-variable body)
-  ;; silence some SBCL noise about deleted code in generated code
-  `(locally (declare #+sbcl (sb-ext:muffle-conditions sb-ext:compiler-note))
-     ,(call-next-method)))
+  (defmethod cst::destructure-lambda-list
+      ((client 3bil2) ll
+       argument-variable tail-variable body)
+    ;; silence some SBCL noise about deleted code in generated code
+    `(locally (declare #+sbcl (sb-ext:muffle-conditions sb-ext:compiler-note))
+       ,(call-next-method))))
 
 
 (defmacro defmacro/3bil2 (name lambda-list &body body)
