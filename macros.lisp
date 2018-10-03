@@ -73,7 +73,15 @@
                   (lambda ,(mapcar 'first lambda-list)
                    (declare ,@ (loop for (name type) in lambda-list
                                      collect (list 'type type name)))
-                   ,@body))))))
+                   (macrolet
+                       ((call-next-method (&rest a)
+                          `(,',name
+                            (super ,',(first (first lambda-list)))
+                            ,@(or (cdr a)
+                                  ',(loop for (name nil)
+                                            in (cdr lambda-list)
+                                          collect name)))))
+                     ,@body)))))))
     ;; todo: store the generated code somewhere...
     (format t "~&method body =>~%  ~s~%" code))
   nil)

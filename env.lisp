@@ -178,3 +178,7 @@
                        :fields (register-ffi-fields fields class-name)
                        :attributes attributes
                        :access access)))
+
+(defmethod cleavir-env:eval (form env (env2 3bil2-environment))
+  ;; fixme: eval this in local env
+  (eval form))

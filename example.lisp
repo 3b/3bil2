@@ -8,16 +8,13 @@
     ())
    (defmethod-native java/lang/object:<init> ((this hello-activity))
     (declare (values))
-    #++(call-next-method)
-    (java/lang/object:<init> (super this))
+    (call-next-method)
     (values))
 
    (defmethod-native android/app/activity:on-create ((this hello-activity)
                                                      (saved-instance-state
                                                       android/os:bundle))
     (declare (values))
-    #++(call-next-method)
-    (android/app/activity:on-create (super this)
-     saved-instance-state)
+    (call-next-method)
     (android/app/activity:set-content-view this 2130903040)
     (values))))
