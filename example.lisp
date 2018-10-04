@@ -375,17 +375,10 @@
     (set-content-view this 2130903040)
     (values))
 
-   (3bil2::defmethod-native on-blaah
-    :public ((this hello-activity))
+   (3bil2::defmethod-native on-blaah :public ((this hello-activity))
     (set-content-view this 1234)
     123)
 
-   (3bil2::defmethod-native foo
-    :private ((this hello-activity))
+   (3bil2::defmethod-native foo :private ((this hello-activity))
     (set-content-view this 1234)
     123)))
-
-(find 'on-create
-        (3bil2::methods
-         (gethash 'hello-activity (3bil2::native-classes 3bil2::*3bil2-environment*)))
-      :key 'cleavir-env:name)
