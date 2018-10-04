@@ -11,22 +11,27 @@
    (native-globals :initform (make-hash-table) :reader native-globals)
    (constants :initform (make-hash-table) :reader constants)))
 
+(defmethod cleavir-compilation-policy:compute-policy-quality
+    (name optimize (env 3bil2-environment))
+  ;; todo: EQL specialize on known qualities:
+  #++ CLEAVIR-ESCAPE:TRUST-DYNAMIC-EXTENT
+  #++ CLEAVIR-KILDALL-TYPE-INFERENCE:INSERT-TYPE-CHECKS
+  ;;(format t "~%got optimize quality ~s~%  ~s?" name optimize)
+  1)
+
+(defvar *3bil2-environment* (make-instance '3bil2-environment))
+(setf (sicl-genv:declaration 'values *3bil2-environment*) t)
+(setf (sicl-genv:declaration 'native-method *3bil2-environment*) t)
+
+
 (defclass native-method-function-info (cleavir-env:special-operator-info)
   ( ;; lisp name of native class
    (native-class :reader native-class :initarg :native-class)
    (from :reader from :initarg :from)
    ;; java name of field
    (field-name :reader field-name :initarg :field-name)
-   (signatures :accessor signatures :initarg :signatures)))
-
-(defun define-constant (name value)
-  (when (nth-value 1 (gethash name (constants *3bil2-environment*)))
-    ;; fixme: handle constants properly
-    #++(unless (eql value (gethash name (constants *3bil2-environment*)))
-      (format t "~&!!!!! redefining constant ~s from ~s to ~s!~%"
-              name (gethash name (constants *3bil2-environment*)) value)))
-  (setf (gethash name (constants *3bil2-environment*))
-        value))
+   ;; (class-name signature) -> (access exceptions code-info)
+   (signatures :reader signatures :initform (make-hash-table))))
 
 (defclass native-class ()
   ((name :reader name :initarg :name)
@@ -34,7 +39,7 @@
    (extends :reader extends :initarg :extends)
    (implements :reader implements :initarg :implements)
    (fields :reader fields :initarg :fields)
-   (methods :reader methods :initarg :methods)
+   (methods :accessor methods :initarg :methods)
    (attributes :reader attributes :initarg :attributes)
    (access :reader access :initarg :access)))
 
@@ -60,18 +65,35 @@
    (attributes :reader attributes :initarg :attributes)))
 
 
-(defmethod cleavir-compilation-policy:compute-policy-quality
-    (name optimize (env 3bil2-environment))
-  ;; todo: EQL specialize on known qualities:
-  #++ CLEAVIR-ESCAPE:TRUST-DYNAMIC-EXTENT
-  #++ CLEAVIR-KILDALL-TYPE-INFERENCE:INSERT-TYPE-CHECKS
-  ;;(format t "~%got optimize quality ~s~%  ~s?" name optimize)
-  1)
+(defmethod signatures-for-class (class (m native-method-function-info))
+  (error "?"))
 
+(defmethod signatures-for-class ((class symbol)
+                                 (m native-method-function-info))
+  (gethash class (signatures m)))
 
-(defvar *3bil2-environment* (make-instance '3bil2-environment))
-(setf (sicl-genv:declaration 'values *3bil2-environment*) t)
-(setf (sicl-genv:declaration 'native-method *3bil2-environment*) t)
+(defmethod signatures-for-class ((class native-class)
+                                 (m native-method-function-info))
+  (gethash (name class) (signatures m)))
+
+(defmethod public-methods ((c symbol) &key include-protected)
+  (when (gethash c (native-classes *3bil2-environment*))
+    (public-methods (gethash c (native-classes *3bil2-environment*))
+                    :include-protected include-protected)))
+
+(defmethod public-methods ((c native-class) &key include-protected)
+  (loop with class-name = (name c)
+        for m in (methods c)
+        for method-name = (cleavir-env:name m)
+        for sigs = (signatures-for-class class-name m)
+        for public = (loop for (sig-name nil a)
+                             in (alexandria:hash-table-values sigs)
+                               thereis (and (eql sig-name class-name)
+                                            (or (member :public a)
+                                                (and include-protected
+                                                     (member :protected a)))))
+        when public
+          collect m))
 
 (defmethod cleavir-env:function-info ((env 3bil2-environment) name)
   (or (call-next-method)
@@ -111,23 +133,35 @@
   ;; changes in other parts
   (setf access (remove :native access))
   (setf attributes (remove :code attributes :key 'car))
-  (if (gethash lisp-name (native-methods  *3bil2-environment*))
-      (let ((old (gethash lisp-name (native-methods  *3bil2-environment*))))
-        (pushnew (list native-class type access attributes)
-                 (signatures old) :test 'equal)
-        old)
-      (setf (gethash lisp-name (native-methods *3bil2-environment*))
-            (make-instance 'native-method-function-info
-                           :name lisp-name
-                           :from (first (first from))
-                           :native-class native-class
-                           :field-name name
-                           :signatures (list (list native-class type access
-                                                   attributes))))))
+  (unless (gethash lisp-name (native-methods  *3bil2-environment*))
+    (setf (gethash lisp-name (native-methods *3bil2-environment*))
+          (make-instance 'native-method-function-info
+                         :name lisp-name
+                         :from (first (first from))
+                         :native-class native-class
+                         :field-name name
+                         #+:signatures (list (list native-class type access
+                                                   attributes)))))
+  (let ((m (gethash lisp-name (native-methods *3bil2-environment*))))
+    (unless (gethash native-class (signatures m))
+      (setf (gethash native-class (signatures m))
+            (make-hash-table :test 'equal)))
+    (setf (gethash type (gethash native-class (signatures m)))
+          (list native-class type access attributes))
+    m))
 
 (defun register-ffi-methods (methods class)
   (loop for (n i) on methods by #'cddr
         collect (apply #'register-ffi-method n :native-class class i)))
+
+(defun define-constant (name value)
+  (when (nth-value 1 (gethash name (constants *3bil2-environment*)))
+    ;; fixme: handle constants properly
+    #++(unless (eql value (gethash name (constants *3bil2-environment*)))
+      (format t "~&!!!!! redefining constant ~s from ~s to ~s!~%"
+              name (gethash name (constants *3bil2-environment*)) value)))
+  (setf (gethash name (constants *3bil2-environment*))
+        value))
 
 (defun register-ffi-field (lisp-name &key name type access attributes
                                        native-class from)

@@ -1,15 +1,20 @@
 (in-package 3bil2)
 
 (defun collect-inherited-methods (class super-class)
-  (loop for m in (methods
-                  (gethash super-class (native-classes *3bil2-environment*)))
-        for sigs = (loop for (sc s a ?) in (signatures m)
-                         when (and (eq sc super-class)
-                                   (intersection a '(:public :protected)))
-                           count it
-                           and do (pushnew (list class s a ?)
-                                           (signatures m)
-                                           :test 'equalp))
+  (loop for m in (public-methods
+                  super-class
+                  :include-protected t)
+        for sigs = (loop for (sc s a ?)
+                           in (alexandria:hash-table-values
+                               (gethash super-class (signatures m)))
+                         count 1
+                         ;; fixme: abstract this
+                         do (unless (gethash class (signatures m))
+                              (setf (gethash class (signatures m))
+                                    (make-hash-table :test 'equal)))
+                            (setf (gethash s
+                                           (gethash class (signatures m)))
+                                  (list class s a ?)))
         when (plusp sigs)
           collect m))
 

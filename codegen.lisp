@@ -4,6 +4,7 @@
 (defvar *variable-type-info* (make-hash-table))
 (defvar *compile-env* nil)
 (defvar *variable-usage* (make-hash-table))
+(defvar *return-type* nil)
 
 (defgeneric hir-to-dalvik (hir))
 
@@ -52,6 +53,9 @@
 
 (defun java-type-string-for-class (class)
   (etypecase class
+    ((cons (eql signed-byte))
+     (ecase (second class)
+       (32 "I")))
     ((or (signed-byte 32) (eql fixnum))
      "I")
     ((eql :void)
@@ -101,23 +105,21 @@
                               (format nil "~a" (char sig (1+ i)))))))
 
 (defun select-method-signature (method class args)
-  (let* ((signatures (remove class
-                             (signatures method)
-                             :key 'car :test-not 'eql))
+  (let* ((signatures (signatures-for-class class method))
          (arg-types (mapcar #'java-type-string-for-variable args))
          (arg-signature (format nil "(~{~a~})" arg-types))
-         (match (loop for s in signatures
-                      when (alexandria:starts-with-subseq arg-signature
-                                                          (second s))
+         (match (loop for s in (alexandria:hash-table-keys signatures)
+                      when (alexandria:starts-with-subseq arg-signature s)
                         collect s)))
-    (format t " sigs ~s~%  @@ ~s~%" arg-signature signatures)
+    (format t " sigs ~s~%  @@ ~s~%" arg-signature
+            (alexandria:hash-table-keys signatures))
     (format t " match = ~s~%" match)
     (unless (= 1 (length match))
       (format t "couldn't find signature match for ~s? ~s ~s~%"
               (name method)
               arg-signature
-              signatures))
-    (append (simplified-signature (second (first match)))
+              (alexandria:hash-table-keys signatures)))
+    (append (simplified-signature (first match))
             (list
              (map 'vector #'java-type-string-for-variable
                   args)
@@ -175,17 +177,27 @@
     (format t "assign ~s <- ~s~%" out in)
     (etypecase in
       (cleavir-ir:load-time-value-input
-       (let ((form (cleavir-ir:form in)))
+       (let* ((form (cleavir-ir:form in))
+              (v (if (consp form) (second form) form)))
          (assert (typep form
                         '(or number (cons (eql quote) (cons number)))))
          (use-variables :assign (cleavir-ir:outputs ir)
                         :indexed t)
-         (asm :const out (if (consp form) (second form) form))))))
+         (asm :const out v)
+         (setf (gethash out *variable-type-info*)
+               (cond
+                 ((typep v '(signed-byte 32))
+                  '((signed-byte 32)))
+                 (t
+                  (error "don't know how to determine type of ~s yet" v))))))))
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:fixed-to-multiple-instruction))
   (format t "fixed-to-multiple-instruction <- ~s~%" (cleavir-ir:inputs ir))
   (format t " -> ~s~%" (cleavir-ir:outputs ir))
+  (setf (gethash (car (cleavir-ir:outputs ir)) *variable-type-info*)
+        (gethash (car (cleavir-ir:inputs ir)) *variable-type-info*))
+
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:return-instruction))
@@ -196,10 +208,21 @@
     (if (and (= 1 (length d))
              (typep (car d) 'cleavir-ir:fixed-to-multiple-instruction)
              (zerop (length (cleavir-ir:inputs (car d)))))
-        (asm :return-void)
         (progn
+          (assert (or (not *return-type*)
+                      (eql *return-type* :void)))
+          (setf *return-type* :void)
+          (asm :return-void))
+        (let ((type (car (gethash v *variable-type-info*))))
+          (unless type
+            (break "~s" v
+                   *variable-type-info*
+                   *variable-usage*))
+          (assert (or (not *return-type*)
+                      (eql *return-type* type)))
+          (setf *return-type* type)
           (use-variables :return (cleavir-ir:inputs ir) :indexed nil)
-          (asm :return (car (cleavir-ir:inputs ir)))))))
+          (asm :return v)))))
 
 
 
@@ -229,13 +252,20 @@
                            collect it
                          else collect i))
      (length args)
-     (1+ max))))
+     (1+ max)
+     (format nil "(~{~a~})~a"
+             ;; don't include 'this' in signature
+             (loop for (a) in (cdr (sort (copy-list args)
+                                     '< :key 'second))
+                   collect (java-type-string-for-variable a))
+             (java-type-string-for-class  *return-type*)))))
 
 (defun compile-hir (hir env)
   (let ((*variable-type-info* (make-hash-table))
         (*current-code* nil)
         (*compile-env* env)
-        (*variable-usage* (make-hash-table)))
+        (*variable-usage* (make-hash-table))
+        (*return-type* nil))
     (hir-to-dalvik hir)
     (setf *current-code* (reverse *current-code*))
     (format t "~%~%compiled ~s~%" *current-code*)

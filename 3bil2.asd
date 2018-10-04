@@ -10,6 +10,7 @@
   :components ((:file "ir")
                (:file "codegen")
                (:file "compile")
+               (:file "utils")
                (:file "macros")))
 
 (defsystem :3bil2/env

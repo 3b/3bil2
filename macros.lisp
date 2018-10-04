@@ -41,6 +41,8 @@
   ;; everything this does needs to be compiled into the .dex file
   (format t "~&defclass-native ~s ~s ~s ~s~%" name direct-superclasses
           direct-slots options)
+  (when direct-slots
+    (error "native-class slots not implemented yet"))
   (let ((super (or (first direct-superclasses)
                    'java/lang:object)))
     (setf (gethash name (native-classes *3bil2-environment*))
@@ -68,10 +70,12 @@
                         :private
                         (pop args)))
         (lambda-list (pop args))
-        (body args))
+        (body args)
+        (this-type))
     (format t "~&defmethod-native ~s ~s ~s~%" name visibility lambda-list)
     (unless (every 'consp lambda-list)
       (error "you need to specify types for all arguments to native method for now...~% (got ~s )" lambda-list))
+    (setf this-type (second (first lambda-list)))
     (let ((code (compile-toplevel-1
                  (print
                   `(function
@@ -88,5 +92,30 @@
                                             collect name)))))
                        ,@body)))))))
       ;; todo: store the generated code somewhere...
-      (format t "~&method body =>~%  ~s~%" code))
+      (format t "~&method body =>~%  ~s~%" code)
+      ;; todo: better structured return from compile-toplevel
+      (destructuring-bind ((asm args regs sig) ir ast) code
+        (declare (ignore ir ast))
+        (let ((m (gethash name (native-methods *3bil2-environment*))))
+         (unless m
+           (format t "new method ~s ~s~%~%"
+                   this-type name)
+           (setf (gethash name (native-methods *3bil2-environment*))
+                 (make-instance 'native-method-function-info
+                                :field-name (string-downcase (string name))
+                                :name name
+                                :native-class this-type
+                                :from (java-name
+                                       (gethash this-type
+                                                (native-classes
+                                                 *3bil2-environment*)))))
+           (setf m (gethash name (native-methods *3bil2-environment*))))
+          (unless (gethash this-type (signatures m))
+            (setf (gethash this-type (signatures m))
+                  (make-hash-table :test 'equalp)))
+          (pushnew m (methods
+                      (gethash this-type (native-classes *3bil2-environment*))))
+          (setf (gethash sig (gethash this-type (signatures m)))
+                (list this-type sig (list visibility) nil
+                      (list :asm asm :args args :regs regs))))))
     nil))
