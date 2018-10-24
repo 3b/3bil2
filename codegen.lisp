@@ -89,20 +89,7 @@
        (java-type-string-for-class c)))))
 
 (defun simplified-signature (sig)
-  (assert (char= #\( (char sig 0)))
-  (loop with skip = nil
-        for i from 1 below (length sig)
-        for c = (char sig i)
-        until (char= c #\))
-        unless skip
-          collect c into args
-        when (char= c #\L)
-          do (setf skip t)
-        when (char= c #\;)
-          do (setf skip nil)
-        finally (return (list (format nil "~a~{~a~}" (char sig (1+ i))
-                                      (reverse args))
-                              (format nil "~a" (char sig (1+ i)))))))
+  (3b-dex::simplified-signature sig))
 
 (defun select-method-signature (method class args)
   (let* ((signatures (signatures-for-class class method))
@@ -119,12 +106,13 @@
               (name method)
               arg-signature
               (alexandria:hash-table-keys signatures)))
-    (append (simplified-signature (first match))
-            (list
-             (map 'vector #'java-type-string-for-variable
-                  args)
-             (field-name method)
-             nil))))
+    `((,@(simplified-signature (first match))
+       ,(if args
+            (map 'vector #'java-type-string-for-variable
+                 args)
+            #()))
+      ,(field-name method)
+      nil)))
 
 (defmethod hir-to-dalvik ((ir native-call-instruction))
   (let* ((call-type (native-call-type ir))
@@ -156,17 +144,15 @@
               (if (eq name 'java/lang/object:<init>)
                   :invoke-direct
                   :invoke-super)
-              (list
-               (java-type-string-for-class (extends class))
-               (select-method-signature method super-name args))
+              (list* (java-type-string-for-class (extends class))
+                     (select-method-signature method super-name args))
               this
               args))
       (:invoke-virtual
        (apply #'asm
               :invoke-virtual
-              (list (list
-                     (java-type-string-for-class class)
-                     (select-method-signature method class-name args)))
+              (list* (java-type-string-for-class class)
+                     (select-method-signature method class-name args))
               this
               args)))
     (hir-to-dalvik (car (cleavir-ir:successors ir)))))
@@ -251,14 +237,16 @@
                          when (gethash i alloc)
                            collect it
                          else collect i))
-     (length args)
+     (loop for (i) in (sort (copy-list args) '< :key 'second)
+           collect (java-type-string-for-variable i))
      (1+ max)
      (format nil "(~{~a~})~a"
              ;; don't include 'this' in signature
              (loop for (a) in (cdr (sort (copy-list args)
-                                     '< :key 'second))
+                                         '< :key 'second))
                    collect (java-type-string-for-variable a))
-             (java-type-string-for-class  *return-type*)))))
+             (java-type-string-for-class *return-type*))
+     (java-type-string-for-class *return-type*))))
 
 (defun compile-hir (hir env)
   (let ((*variable-type-info* (make-hash-table))

@@ -32,3 +32,8 @@
   :components ((:file "package")
                (:file "system")
                (:file "env")))
+
+(defsystem :3bil2/asdf
+  :depends-on ()
+  :serial t
+  :components ((:file "asdf")))

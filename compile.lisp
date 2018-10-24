@@ -46,3 +46,214 @@
       (remove 'nil (mapcar (lambda (a) (compile-toplevel-1 a :env env))
                            (cdr form)))
       (compile-toplevel-1 form :env env)))
+
+(defun 3bil2-compile-file (file)
+  (let ((*package* *package*))
+    (with-open-file (i file)
+      (loop for f = (read i nil i)
+            until (eq f i)
+            when (typep f '(cons (eql in-package)
+                            (cons (or symbol string) null)))
+              do (setf *package* (find-package (second f)))
+            else
+              do (format t "~&compiling form:~% ~s~%" f)
+                 (compile-toplevel-1 f)))))
+
+(defun add-default-constructor (class)
+  (let ((m (gethash 'java/lang/object:<init>
+                    (native-methods *3bil2-environment*)))
+        (this-type (name class))
+        (sig "()V"))
+    (unless (gethash this-type (signatures m))
+      (setf (gethash this-type (signatures m))
+            (make-hash-table :test 'equalp)))
+    (pushnew m (methods class))
+    (labels ((jc (x)
+               (format nil "L~a;" x))
+             (super ()
+               (jc (java-name
+                    (gethash (extends class)
+                             (native-classes *3bil2-environment*))))))
+      (let ((code
+              `(,this-type
+                "()V"
+                (:constructor :public)
+                nil
+                (:asm
+                 ((:invoke-direct
+                   (,(super)
+                     ("V" "V" #()) "<init>" nil) 0)
+                  (:return-void))
+                 :args (,(jc (java-name class)))
+                 :regs 1 :ret "V"))))
+        (setf (gethash sig (gethash this-type (signatures m)))
+              code)))))
+
+(defun ensure-resource-classes (package resources)
+  (let* ((rpn (format nil "~a/R" package))
+         (rp (or (find-package rpn) (make-package rpn :use nil)))
+         (pp (or (find-package package) (make-package package :use nil)))
+         (resource-classes (make-hash-table)))
+    (loop for (s v) in resources
+          do (let* ((sym (intern s rp))
+                    (split (split-sequence:split-sequence #\/ s))
+                    (.class (format nil "R$~a" (first split)))
+                    (class (intern (string-upcase .class) pp))
+                    (.field (second split))
+                    (field (intern .field rp)))
+               (export sym rp)
+               (export class pp)
+               (format t "~&define resource id ~s = ~8,'0x~%"
+                       sym v)
+               (define-constant sym v)
+               (push (list sym v field)
+                     (gethash class resource-classes))))
+    (register-ffi-class (intern "R" pp) :name (format nil "~(~a~)/R" package)
+                                        :extends 'java/lang:object
+                                        :access '(:public :synthetic :final)
+                                        :fields #()
+                                        :methods #())
+    (export (intern "R" pp) pp)
+    (loop for c being the hash-keys of resource-classes
+            using (hash-value fields)
+          for jname = (format nil "~(~a~)/R~(~a~)"
+                              package
+                              (subseq (string c) 1))
+          for class = (register-ffi-class c :name jname
+                                            :extends 'java/lang:object
+                                            :access '(:public :synthetic
+                                                      :final))
+          do (format t "add resource class ~a (~a):~% ~s~%" c jname fields)
+             (add-default-constructor class)
+             (setf (slot-value class 'fields)
+                   (coerce
+                    (loop for (s v f) in fields
+                          collect
+                          (make-instance 'native-slot
+                                         :name f
+                                         :from jname
+                                         :native-class class
+                                         :field-name (string-downcase f)
+                                         :type "I"
+                                         :access '(:public :synthetic
+                                                   :static :final)
+                                         :attributes `(:constant-value ,v)))
+                    'vector)))))
+
+(defun link-methods (class)
+  (let ((methods
+          (remove-duplicates
+           (loop
+             for m in (methods class)
+             append  (loop for sig in (alexandria:hash-table-values
+                                       (gethash (name class) (signatures m)))
+                           when (fifth sig)
+                             collect (cons m sig)))
+           :test 'equalp)))
+    (loop for (m c sig access nil code) in methods
+          for name = (field-name m)
+          for dcm = (destructuring-bind (&key asm regs args ret) code
+                      (make-instance
+                       '3b-dex::dex-class-method
+                       :annotations nil
+                       :code (make-instance '3b-dex::dex-code
+                                            :debug-info nil
+                                            :instructions asm
+                                            :tries nil
+                                            :ins (length args)
+                                            ;; fixme: what's correct value/meaning for :outs?
+                                            :outs (length args)
+                                            :registers regs)
+                       :flags access
+                       :name (field-name m)
+                       :parameter-annotations nil
+                       :parameters (coerce (cdr args) 'vector)
+                       :return-type ret))
+          when (or (find :private access)
+                   (find :constructor access))
+            collect dcm into direct-methods
+          else collect dcm into virtual-methods
+          finally (return (list (coerce direct-methods 'vector)
+                                (coerce virtual-methods 'vector))))))
+
+#++
+(link-methods (gethash 'com/example/hello::hello-activity
+                       (native-classes *3bil2-environment*)))
+#++
+(gethash 'com/example/hello::r$string
+         (native-classes *3bil2-environment*))
+#++
+(remhash 'com/example/hello:hello-activity
+         (native-classes *3bil2-environment*))
+#++
+(remhash 'com/example/hello/hello-activity::on-blaah
+         (native-methods *3bil2-environment*))
+
+(defun link-fields (class)
+  (when (fields class)
+    (loop for s across (fields class)
+          when (find :static (access s))
+            collect (make-instance '3b-dex::dex-class-static-field
+                                   :value (getf (attributes s) :constant-value)
+                                   :annotations nil
+                                   :flags (access s)
+                                   :name (field-name s)
+                                   :type (field-type s))
+              into static
+          else
+            collect (make-instance '3b-dex::dex-class-field
+                                   :annotations nil
+                                   :flags (access s)
+                                   :name (field-name s)
+                                   :type (field-type s))
+              into instance
+          finally (return (list (coerce static 'vector)
+                                (coerce instance 'vector))))))
+
+(defun link-dex-class (class-name)
+  (flet ((c (c)
+           (let ((c (gethash c (native-classes *3bil2-environment*))))
+             (assert c)
+             c))
+         (jn (class)
+           (format nil "L~a;" (java-name class))))
+    (let* ((class (c class-name))
+           (extends (c (extends class)))
+           (implements (mapcar #'c (implements class)))
+           (methods (link-methods class))
+           (fields (link-fields class)))
+      (make-instance
+       '3b-dex::dex-class
+       :annotations nil
+       :interfaces (when implements (coerce implements 'vector))
+       :superclass (jn extends)
+       :type-name (jn class)
+       :direct-methods (first methods)
+       :virtual-methods (second methods)
+       :flags (access class)
+       :static-fields (first fields)
+       :instance-fields (second fields)))))
+
+
+(defun link-dex-file (&rest classes)
+  (make-instance
+   '3b-dex::dex-file
+   :endian :le
+   :link-table nil
+   :maps nil
+   :version 35
+   :classes (coerce (loop for class in classes
+                          collect (link-dex-class class))
+                    'vector)))
+
+#++
+(with-open-file (f "/tmp/tmp.dex" :direction :io
+                                  :if-exists :supersede
+                                  :if-does-not-exist :create
+                                  :element-type '(unsigned-byte 8))
+  (3b-dex::write-dex-file
+   (link-dex-file 'com/example/hello:hello-activity
+                  'com/example/hello:r$layout
+                  'com/example/hello:r$string
+                  'com/example/hello:r)
+   f))

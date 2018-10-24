@@ -95,6 +95,13 @@
         when public
           collect m))
 
+(defmethod cleavir-env:variable-info ((env 3bil2-environment) name)
+  (cond
+    ((gethash name (constants env))
+     (make-instance 'cleavir-env:constant-variable-info
+                    :value (gethash name (constants env))
+                    :name name))))
+
 (defmethod cleavir-env:function-info ((env 3bil2-environment) name)
   (or (call-next-method)
       (when (symbolp name)
@@ -107,7 +114,6 @@
            (format t "~&!!! ~s ~s~%" name
                    (gethash name (native-methods *3bil2-environment*)))
            ;; return value from hash table
-                                        ;(break ",jhvb")
            (gethash name (native-methods *3bil2-environment*)))
           ((eq (symbol-package name) (find-package 'cleavir-primop))
            (make-instance 'cleavir-env:special-operator-info
@@ -158,8 +164,8 @@
   (when (nth-value 1 (gethash name (constants *3bil2-environment*)))
     ;; fixme: handle constants properly
     #++(unless (eql value (gethash name (constants *3bil2-environment*)))
-      (format t "~&!!!!! redefining constant ~s from ~s to ~s!~%"
-              name (gethash name (constants *3bil2-environment*)) value)))
+         (format t "~&!!!!! redefining constant ~s from ~s to ~s!~%"
+                 name (gethash name (constants *3bil2-environment*)) value)))
   (setf (gethash name (constants *3bil2-environment*))
         value))
 
