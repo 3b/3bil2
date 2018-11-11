@@ -3,11 +3,6 @@
 (defmacro/3bil2 setf (&whole form &environment env
                              place new-value-form
                              &rest more-pairs)
-  (format t "~&expand ~s~%" form)
-  (format t "place ~s~%" place)
-  #++(format t "expand ~s~%" (multiple-value-list
-                           (sicl-global-environment:get-setf-expansion
-                            place env)))
   (cond ((null more-pairs)
 	 (multiple-value-bind (variables
 			       values
@@ -85,16 +80,3 @@
 
 (defsetf/3bil2 slot-value %set-slot-value)
 
-
-;;(let ((*gensym-counter* 0))
-;; (compile-toplevel-1
-;;  `#'(lambda (o)
-;;       (%set-slot-value o 's 1))))
-;;
-;;(setf (slot-value fooo 's) 1)
-;;(get-setf-expansion '(slot-value fooo 's))
-;;(#:FOOO4343)
-;;(FOOO)
-;;(#:NEW1)
-;;(SB-PCL::SET-SLOT-VALUE #:FOOO4343 'S #:NEW1)
-;;(SLOT-VALUE #:FOOO4343 'S)

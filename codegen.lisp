@@ -23,9 +23,6 @@
   (let ((arguments (cleavir-ir:lambda-list ir))
         (outputs (cleavir-ir:outputs ir)))
     (use-variables :enter arguments :indexed t)
-    (format t "enter:~%")
-    (format t " <- ~s~%" arguments)
-    (format t " -> ~s~%" outputs)
     ;; todo: figure out if we need to process arguments or not?
     (loop for c in (cleavir-ir:successors ir)
           do (hir-to-dalvik c))))
@@ -49,22 +46,10 @@
          (.type (cleavir-ir:value-type ir))
          (type (clean-type .type))
          (old (gethash input *variable-type-info*)))
-    #++(when (gethash input *variable-type-info*)
-         (break "the ~s -> ~s~%"
-                (gethash input *variable-type-info*)
-                type))
-    #++
-    (pushnew type
-             (gethash input *variable-type-info*)
-             :test 'equal)
-    (format t "the ~s = ~s~%" input type)
     (cond
       ((and old (not (eql old type)))
        (asm :check-cast input
-            (java-type-string-for-class type)
-            #++(let ((c (gethash type (native-classes *3bil2-environment*))))
-                 (if c
-                     (format nil "L~a;" (java-name c)))))
+            (java-type-string-for-class type))
        (setf (gethash input *variable-type-info*) type))
       ((not old)
        (setf (gethash input *variable-type-info*) type))
@@ -111,7 +96,6 @@
                    (car (cleavir-ir:defining-instructions var))))
          (setf c (constant-assignment-p
                   (car (cleavir-ir:defining-instructions var)))))
-       (format t "var ~s -> ~s~%" var c)
        c))
     (cons
      var)
@@ -145,25 +129,17 @@
     (reverse args)))
 
 (defun match-signature (args signature)
-  #++(break "~a ~a" args arg-types)
-  (format t "match ~s (~a) / ~s~%" args
-          (mapcar 'get-type-for-variable args)
-          signature)
   (let ((arg-types (split-arg-types signature)))
     (when (= (length args) (length arg-types))
       (loop for a in args
             for vt = (get-type-for-variable a)
             for at in arg-types
-            do (format t "@@ ~s / ~s ? ~s~%" a
-                       (java-type-string-for-variable a) at)
             collect (if (string= (java-type-string-for-variable a) at)
                         (java-type-string-for-variable a)
                         (when (or (symbolp vt)
                                   (typep vt 'native-class))
                           (loop for i in (cpl-cache vt)
                                 for ji = (java-type-string-for-class i)
-                                do (format t " @s@ ~s / ~s ? ~s~%"
-                                           i ji at)
                                 when (string= ji at)
                                   return ji)))
               into ret
@@ -172,8 +148,6 @@
 
 (defun select-method-signature (method class args)
   (let* ((signatures (signatures-for-class class method))
-         #++(arg-types (mapcar #'java-type-string-for-variable args))
-         #++(arg-signature (format nil "(~{~a~})" arg-types))
          (static nil)
          (match (if signatures
                     (loop for s in (alexandria:hash-table-keys signatures)
@@ -186,9 +160,6 @@
                                      collect it)))
                       (when s (setf static t))
                       s))))
-    #++(format t " sigs ~s~%  @@ ~s~%" arg-signature
-               (alexandria:hash-table-keys signatures))
-    (format t " match = ~s~%" match)
     (unless (= 1 (length match))
       (format t "couldn't find signature match for ~s? ~s ~s~%"
               (cleavir-env:name method)
@@ -210,8 +181,7 @@
          (s (subseq n (1+ pos)))
          (sym (find-symbol (string-upcase s)
                            (find-package (string-upcase p)))))
-    sym
-    #++(when sym (gethash sym (native-classes *3bil2-environment*)))))
+    sym))
 
 (defmethod hir-to-dalvik ((ir native-call-instruction))
   (let* ((call-type (native-call-type ir))
@@ -227,10 +197,6 @@
                    (native-call-name ir)))
          (method (gethash name (native-methods *compile-env*)))
          (sig nil))
-    (format t "call (~s ~s ~s)~%" name this args)
-    (format t " class = ~s (~s)~%" class class-name)
-    (format t " extends = ~s~%" super)
-    (format t " method = ~s (~s)~%" method name)
     (use-variables :native-call (cleavir-ir:inputs ir) :indexed nil)
     (ecase call-type
       (:invoke-direct
@@ -252,11 +218,8 @@
            (select-method-signature method class-name args)
          (setf class (gethash class-name (native-classes *compile-env*)))
          (setf sig s1)
-         (format t "sig = ~s ~%" sig)
-         (format t "= ~s~%" (gethash class-name (signatures method)))
          (let ((access (third
                         (gethash s2 (gethash class-name (signatures method))))))
-           (format t " access= ~s~%" access)
            (apply #'asm
                   (if static
                       :invoke-static
@@ -270,9 +233,6 @@
                (cleavir-ir:using-instructions (first (cleavir-ir:outputs ir))))
       (let ((r (second (first sig)))
             (out (first (cleavir-ir:outputs ir))))
-        (format t "outputs = ~s~%" (cleavir-ir:outputs ir))
-        (format t "sig = ~s~%" sig)
-        (format t "r = ~s~%" r)
         (ecase (char r 0)
           (#\V ;; void ret, do nothing
            )
@@ -291,7 +251,6 @@
 (defmethod hir-to-dalvik ((ir cleavir-ir:assignment-instruction))
   (let ((in (car (cleavir-ir:inputs ir)))
         (out (car (cleavir-ir:outputs ir))))
-    (format t "assign ~s <- ~s~%" out in)
     (etypecase in
       (cleavir-ir:load-time-value-input
        (let* ((form (cleavir-ir:form in))
@@ -324,27 +283,21 @@
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:fixed-to-multiple-instruction))
-  (format t "fixed-to-multiple-instruction <- ~s~%" (cleavir-ir:inputs ir))
-  (format t " -> ~s~%" (cleavir-ir:outputs ir))
   (setf (gethash (car (cleavir-ir:outputs ir)) *variable-type-info*)
         (gethash (car (cleavir-ir:inputs ir)) *variable-type-info*))
 
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:multiple-to-fixed-instruction))
-  (format t "multiple-to-fixed-instruction <- ~s~%" (cleavir-ir:inputs ir))
-  (format t " -> ~s~%" (cleavir-ir:outputs ir))
   (when (cleavir-ir:outputs ir)
     (error "todo: multiple-to-fixed-instruction not implemented yet"))
 
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:nop-instruction))
-  (format t "nop~%")
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir add-instruction))
-  (format t "add~%")
   (when (cleavir-ir:outputs ir)
     (assert (= 2 (length (cleavir-ir:inputs ir))))
     (use-variables :add (cleavir-ir:inputs ir))
@@ -354,7 +307,6 @@
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:slot-write-instruction))
-  (format t "write slot ~s~%" (slot-name ir))
   (let* ((object (first (cleavir-ir:inputs ir)))
          (value (second (cleavir-ir:inputs ir)))
          (class (gethash (gethash object *variable-type-info*)
@@ -365,9 +317,6 @@
                         (field-type slot))))
     (assert slot)
     (use-variables :write-slot (list value object))
-    (format t "class ~s / ~s " (gethash object *variable-type-info*)
-            slot)
-
     (ecase (char (field-type slot) 0) ;; todo: other types
       (#\I
        (asm :iput value object slot-id))
@@ -376,7 +325,6 @@
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:slot-read-instruction))
-  (format t "read slot ~s~%" (slot-name ir))
   (let* ((object (first (cleavir-ir:inputs ir)))
          (class (gethash (gethash object *variable-type-info*)
                          (native-classes *3bil2-environment*)))
@@ -387,9 +335,6 @@
          (out (first (cleavir-ir:outputs ir))))
     (assert slot)
     (use-variables :read-slot (list object))
-    (format t "class ~s / ~s " (gethash object *variable-type-info*)
-            slot)
-
     (ecase (char (field-type slot) 0) ;; todo: other types
       (#\I
        (asm :iget out object slot-id))
@@ -398,10 +343,8 @@
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:return-instruction))
-  (format t "return ~s~%" (cleavir-ir:inputs ir))
   (let* ((v (car (cleavir-ir:inputs ir)))
          (d (cleavir-ir:defining-instructions v)))
-    (format t "  ~s ~s~%" v d)
     (if (and (= 1 (length d))
              (typep (car d) 'cleavir-ir:fixed-to-multiple-instruction)
              (zerop (length (cleavir-ir:inputs (car d)))))
@@ -421,8 +364,6 @@
           (use-variables :return (cleavir-ir:inputs ir) :indexed nil)
           (asm :return v)))))
 
-
-
 (defun regalloc (uses code)
   (let ((alloc (make-hash-table))
         (counter -1)
@@ -431,11 +372,9 @@
     (loop for v being the hash-keys of uses
             using (hash-value u)
           for e = (assoc :enter u)
-          do (format t "~s ~s~%   ~s~%" v u e)
           when e
             do (push (list v (second e)) args)
-          else do (format t "alloc ~s ~s~%" v counter)
-                  (setf (gethash v alloc)
+          else do (setf (gethash v alloc)
                         (or (gethash v alloc) (incf counter))))
     (incf counter)
     (loop for (v i) in args

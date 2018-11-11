@@ -112,8 +112,6 @@
                     (field (intern .field rp)))
                (export sym rp)
                (export class pp)
-               (format t "~&define resource id ~s = ~8,'0x~%"
-                       sym v)
                (define-constant sym v)
                (push (list sym v field)
                      (gethash class resource-classes))))
@@ -132,8 +130,7 @@
                                             :extends 'java/lang:object
                                             :access '(:public :synthetic
                                                       :final))
-          do (format t "add resource class ~a (~a):~% ~s~%" c jname fields)
-             (add-default-constructor class)
+          do (add-default-constructor class)
              (setf (slot-value class 'fields)
                    (coerce
                     (loop for (s v f) in fields
@@ -184,19 +181,6 @@
           else collect dcm into virtual-methods
           finally (return (list (coerce direct-methods 'vector)
                                 (coerce virtual-methods 'vector))))))
-
-#++
-(link-methods (gethash 'com/example/hello::hello-activity
-                       (native-classes *3bil2-environment*)))
-#++
-(gethash 'com/example/hello::r$string
-         (native-classes *3bil2-environment*))
-#++
-(remhash 'com/example/hello:hello-activity
-         (native-classes *3bil2-environment*))
-#++
-(remhash 'com/example/hello/hello-activity::on-blaah
-         (native-methods *3bil2-environment*))
 
 (defun link-fields (class)
   (when (fields class)

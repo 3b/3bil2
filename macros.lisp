@@ -41,9 +41,6 @@
   ;; everything this does needs to be compiled into the .dex file
   (format t "~&defclass-native ~s ~s ~s ~s~%" name direct-superclasses
           direct-slots options)
-  #++
-  (when direct-slots
-    (error "native-class slots not implemented yet"))
   (let* ((super (or (first direct-superclasses)
                     'java/lang:object))
          (c (make-instance
@@ -115,15 +112,11 @@
                                               in (cdr lambda-list)
                                             collect name)))))
                        ,@body)))))))
-      ;; todo: store the generated code somewhere...
-      (format t "~&method body =>~%  ~s~%" code)
       ;; todo: better structured return from compile-toplevel
       (destructuring-bind ((asm args regs sig ret) ir ast) code
         (declare (ignore ir ast))
         (let ((m (gethash name (native-methods *3bil2-environment*))))
           (unless m
-            (format t "new method ~s ~s~%~%"
-                    this-type name)
             (setf (gethash name (native-methods *3bil2-environment*))
                   (make-instance 'native-method-function-info
                                  :field-name (string-downcase (string name))

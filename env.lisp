@@ -106,8 +106,6 @@
 
 (defmethod signatures-for-superclass ((class native-class)
                                       (m native-method-function-info))
-  (format t "look for sigs from superclasses of ~s: ~s~%"
-          (name class) (list* (extends class) (implements class)))
   (loop for i in (list* (extends class) (implements class))
         when (and i (signatures-for-class i m))
           return it))
@@ -162,8 +160,6 @@
            (make-instance 'cleavir-env:special-operator-info
                           :name name))
           ((gethash name (native-methods *3bil2-environment*))
-           (format t "~&!!! ~s ~s~%" name
-                   (gethash name (native-methods *3bil2-environment*)))
            ;; return value from hash table
            (gethash name (native-methods *3bil2-environment*)))
           ((eq (symbol-package name) (find-package 'cleavir-primop))
@@ -200,9 +196,7 @@
                          :name lisp-name
                          :from (first (first from))
                          :native-class native-class
-                         :field-name name
-                         #+:signatures (list (list native-class type access
-                                                   attributes)))))
+                         :field-name name)))
   (let ((m (gethash lisp-name (native-methods *3bil2-environment*))))
     (unless (gethash native-class (signatures m))
       (setf (gethash native-class (signatures m))

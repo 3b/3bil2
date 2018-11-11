@@ -80,17 +80,11 @@
                         (loop for f in (fields c)
                               for pub = (member :public (access f))
                               for prot = (member :protected (access f))
-                              do (imp (name f) pub prot)
-                              #+do (format t "~s ~s~%" (name f) (access f)))
+                              do (imp (name f) pub prot))
                         (loop for m in (public-methods c :include-protected t)
-                              #++(methods c)
                               for (prot pub) = (public-method-p
                                                 (signatures-for-class cn m))
-                              do (imp (cleavir-env:name m) pub prot)
-                              #+do (format t "~s ~s~%~s~%" (cleavir-env:name f)
-                                           i
-                                           (remove cn (signatures f) :key 'car
-                                                                     :test-not 'eql))))
+                              do (imp (cleavir-env:name m) pub prot)))
                    finally
                       (return
                         (append
@@ -118,10 +112,3 @@
                           do (setf (gethash (name f) s) t))
                   (sort (mapcar 'string (alexandria:hash-table-keys s))
                         'string<)))))))))
-#++
-(gethash 'com/example/hello/hello-activity::hello-activity
-         (native-classes *3bil2-environment*))
-#++
-(gethash 'android/app:activity
-         (native-classes *3bil2-environment*))
-
