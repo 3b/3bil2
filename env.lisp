@@ -25,7 +25,7 @@
 
 
 (defclass native-method-function-info (cleavir-env:special-operator-info)
-  ( ;; lisp name of native class
+  (;; lisp name of native class
    (native-class :reader native-class :initarg :native-class)
    (from :reader from :initarg :from)
    ;; java name of field
@@ -41,7 +41,8 @@
    (fields :reader fields :initarg :fields)
    (methods :accessor methods :initarg :methods)
    (attributes :reader attributes :initarg :attributes)
-   (access :reader access :initarg :access)))
+   (access :reader access :initarg :access)
+   (cpl-cache :initform nil)))
 
 (defclass native-global ()
   ((name :reader name :initarg :name)
@@ -64,13 +65,63 @@
    (access :reader access :initarg :access)
    (attributes :reader attributes :initarg :attributes)))
 
+(defmethod extends ((x symbol))
+  (let ((c (gethash x (native-classes *3bil2-environment*))))
+    (assert c)
+    (when c
+      (extends c))))
+
+(defmethod implements ((x symbol))
+  (let ((c (gethash x (native-classes *3bil2-environment*))))
+    (assert c)
+    (when c
+      (implements c))))
+
+(defmethod cpl-cache ((c native-class))
+  (or (slot-value c 'cpl-cache)
+      ;; fixme: figure out order we should check superclasses when
+      ;; finding a method
+      (setf (slot-value c 'cpl-cache)
+            (let ((superclasses (loop for x = (extends c) then (extends x)
+                                      while x
+                                      collect x))
+                  (interfaces nil))
+              (labels ((r (c)
+                         (print c)
+                         (loop for x in (print (implements c))
+                               do (push x interfaces)
+                                  (r x))))
+                (r c)
+                (setf interfaces (reverse interfaces)))
+              (loop for i in (append superclasses interfaces)
+                    when (typep i 'native-class)
+                      collect (name i)
+                    else collect i)))))
+
+(defmethod cpl-cache ((c symbol))
+  (cpl-cache (gethash c (native-classes *3bil2-environment*))))
 
 (defmethod signatures-for-class (class (m native-method-function-info))
-  (error "?"))
+  nil)
+
+(defmethod signatures-for-superclass ((class native-class)
+                                      (m native-method-function-info))
+  (format t "look for sigs from superclasses of ~s: ~s~%"
+          (name class) (list* (extends class) (implements class)))
+  (loop for i in (list* (extends class) (implements class))
+        when (and i (signatures-for-class i m))
+          return it))
+
+(defmethod signatures-for-superclass ((class symbol)
+                                      (m native-method-function-info))
+  (signatures-for-superclass
+   (gethash class (native-classes *3bil2-environment*))
+   m))
 
 (defmethod signatures-for-class ((class symbol)
                                  (m native-method-function-info))
-  (gethash class (signatures m)))
+  (or (gethash class (signatures m))
+      (signatures-for-superclass class m)))
 
 (defmethod signatures-for-class ((class native-class)
                                  (m native-method-function-info))
@@ -118,7 +169,11 @@
           ((eq (symbol-package name) (find-package 'cleavir-primop))
            (make-instance 'cleavir-env:special-operator-info
                           :name name))
-          ((member name '(+ eq error))
+          ;; some hard-coded builtins
+          ((member name '(%set-slot-value slot-value +))
+           (make-instance 'cleavir-env:special-operator-info
+                          :name name))
+          ((member name '(eq error))
            (make-instance 'cleavir-env:global-function-info
                           :name name))))))
 
@@ -139,7 +194,7 @@
   ;; changes in other parts
   (setf access (remove :native access))
   (setf attributes (remove :code attributes :key 'car))
-  (unless (gethash lisp-name (native-methods  *3bil2-environment*))
+  (unless (gethash lisp-name (native-methods *3bil2-environment*))
     (setf (gethash lisp-name (native-methods *3bil2-environment*))
           (make-instance 'native-method-function-info
                          :name lisp-name

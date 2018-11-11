@@ -41,8 +41,9 @@
          (defpackage ,(format nil "~a/~a"
                               (package-name (symbol-package class-name))
                               (string class-name))
-           (:use :cl ,(class-package-name extends) ,@ (mapcar 'class-package-name
-                                                              implements))
+           (:use :cl ,(class-package-name extends)
+                 ,@ (mapcar #'class-package-name
+                            implements))
            (:import-from :3bil2
             :defclass-native :defmethod-native)
            (:local-nicknames ("R" ,r))

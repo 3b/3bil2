@@ -11,7 +11,8 @@
                (:file "codegen")
                (:file "compile")
                (:file "utils")
-               (:file "macros")))
+               (:file "macros")
+               (:file "sicl-setf")))
 
 (defsystem :3bil2/env
   ;; separate since ffi defs depend on it to load ffi, and codegen etc
@@ -27,7 +28,8 @@
                "cleavir-hir-transformations"
                "cleavir-remove-useless-instructions"
                "cleavir-hir-to-mir"
-               "cleavir-basic-blocks")
+               "cleavir-basic-blocks"
+               "cleavir-partial-inlining")
   :serial t
   :components ((:file "package")
                (:file "system")

@@ -32,13 +32,21 @@
          (ast (cleavir-cst-to-ast:cst-to-ast cst env sys))
          (hir (unless (empty-form-p ast)
                 (cleavir-ast-to-hir:compile-toplevel-unhoisted ast))))
+
     (when hir
+      (cleavir-ast-graphviz:draw-ast ast "/tmp/ast.dot")
+      (cleavir-ir-graphviz:draw-flowchart hir "/tmp/hir.dot")
+      (cleavir-partial-inlining:do-inlining hir)
+      (cleavir-ir-graphviz:draw-flowchart hir "/tmp/hir1.dot")
       (cleavir-kildall-type-inference:infer-types hir env :prune t)
       (cleavir-hir-transformations:eliminate-typeq hir)
       (cleavir-hir-transformations:eliminate-superfluous-temporaries hir)
-
+      #++(cleavir-remove-useless-instructions:remove-useless-instructions hir)
+      (cleavir-ir-graphviz:draw-flowchart hir "/tmp/hir2.dot")
       (list (multiple-value-list
-             (compile-hir hir env))
+             (compile-hir hir env
+                          (when (typep ast 'native-method-ast)
+                            (native-method-arg-types ast))))
             hir ast))))
 
 (defun compile-toplevel (form &key env)
@@ -49,6 +57,7 @@
 
 (defun 3bil2-compile-file (file)
   (let ((*package* *package*))
+    (format t " compiling file ~s~%" file)
     (with-open-file (i file)
       (loop for f = (read i nil i)
             until (eq f i)
@@ -145,10 +154,10 @@
           (remove-duplicates
            (loop
              for m in (methods class)
-             append  (loop for sig in (alexandria:hash-table-values
-                                       (gethash (name class) (signatures m)))
-                           when (fifth sig)
-                             collect (cons m sig)))
+             append (loop for sig in (alexandria:hash-table-values
+                                      (gethash (name class) (signatures m)))
+                          when (fifth sig)
+                            collect (cons m sig)))
            :test 'equalp)))
     (loop for (m c sig access nil code) in methods
           for name = (field-name m)
@@ -219,7 +228,7 @@
            (format nil "L~a;" (java-name class))))
     (let* ((class (c class-name))
            (extends (c (extends class)))
-           (implements (mapcar #'c (implements class)))
+           (implements (mapcar #'jn (mapcar #'c (implements class))))
            (methods (link-methods class))
            (fields (link-fields class)))
       (make-instance

@@ -41,26 +41,44 @@
   ;; everything this does needs to be compiled into the .dex file
   (format t "~&defclass-native ~s ~s ~s ~s~%" name direct-superclasses
           direct-slots options)
+  #++
   (when direct-slots
     (error "native-class slots not implemented yet"))
-  (let ((super (or (first direct-superclasses)
-                   'java/lang:object)))
+  (let* ((super (or (first direct-superclasses)
+                    'java/lang:object))
+         (c (make-instance
+             'native-class
+             :access '(:public)
+             :attributes nil
+             :extends super
+             :implements (cdr direct-superclasses)
+             :methods (collect-inherited-methods name super)
+             :fields nil
+             :java-name (print
+                         (substitute
+                          #\_ #\-
+                          (substitute #\/ #\:
+                                      (let ((*package* (find-package :keyword)))
+                                        (format nil "~(~s~)" name)))))
+             :name name)))
     (setf (gethash name (native-classes *3bil2-environment*))
-          (make-instance
-           'native-class
-           :access '(:public)
-           :attributes nil
-           :extends super
-           :implements (cdr direct-superclasses)
-           :methods (collect-inherited-methods name super)
-           :fields nil
-           :java-name (print
-                       (substitute
-                        #\_ #\-
-                        (substitute #\/ #\:
-                                    (let ((*package* (find-package :keyword)))
-                                      (format nil "~(~s~)" name)))))
-           :name name)))
+          c)
+    (setf (slot-value c 'fields)
+          (coerce
+           (loop for s in direct-slots
+                 for name = (car s)
+                 for type = (getf (cdr s) :type)
+                 do (assert type)
+                 collect (make-instance 'native-slot
+                                        :name name
+                                        :from (java-name c)
+                                        :native-class c
+                                        :field-name (string-downcase name)
+                                        :type (java-type-string-for-class
+                                               type)
+                                        :access '(:public)
+                                        :attributes nil))
+           'vector)))
   (add-default-constructor (gethash name (native-classes *3bil2-environment*)))
   nil)
 
