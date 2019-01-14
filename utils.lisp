@@ -45,7 +45,7 @@
                  ,@ (mapcar #'class-package-name
                             implements))
            (:import-from :3bil2
-            :defclass-native :defmethod-native)
+            :defclass-native :defmethod-native :new)
            (:local-nicknames ("R" ,r))
            ,@(when containing-package
                `((,(if (loop for c in (cons extends implements)
