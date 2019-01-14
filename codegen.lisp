@@ -206,8 +206,11 @@
          (old (get-variable-type input)))
     (cond
       ((and old (not (eql old type)))
-       (asm :check-cast input
-            (java-type-string-for-class type))
+       (let ((s (java-type-string-for-class type)))
+         (if (char= (char s 0) #\L)
+             (asm :check-cast input s)
+             (unless (string= s "I")
+               (break "skipping check-cast for type ~s~%" s))))
        (set-variable-type input type))
       ((not old)
        (set-variable-type input type))
