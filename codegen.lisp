@@ -333,31 +333,37 @@
 (defun select-method-signature (method class args)
   (let* ((signatures (signatures-for-class class method))
          (static nil)
-         (match (if signatures
-                    (loop for s in (alexandria:hash-table-keys signatures)
-                          when (match-signature args s)
-                            collect it)
-                    (let ((s (loop for s in (alexandria:hash-table-keys
-                                             (gethash (native-class method)
-                                                      (signatures method)))
-                                   when (match-signature (cons class args) s)
-                                     collect it)))
-                      (when s (setf static t))
-                      s))))
+         (match nil))
+    (unless signatures
+      (setf signatures (gethash (native-class method)
+                                (signatures method)))
+      (setf static t)
+      (setf args (cons class args)))
+
+    (setf match
+          (loop for s in (alexandria:hash-table-keys signatures)
+                when (match-signature args s)
+                  collect it))
+
     (unless (= 1 (length match))
       (format t "couldn't find signature match for ~s? ~s ~s~%"
               (cleavir-env:name method)
               nil
               (when signatures
                 (alexandria:hash-table-keys signatures))))
-    (values
-     `((,@(simplified-signature (first (first match)))
-        ,(coerce (second (first match)) 'vector))
-       ,(field-name method)
-       nil)
-     (first (first match))
-     (if static (native-class method) class)
-     static)))
+
+    (let ((ms (gethash (first (first match)) signatures)))
+      (when static
+        (assert (find :static (third ms))))
+      (values
+       `((,@(simplified-signature (first (first match)))
+          ,(coerce (second (first match)) 'vector))
+         ,(field-name method)
+         nil)
+       (first (first match))
+       (if static (native-class method) class)
+       static
+       (find :private (third ms))))))
 
 (defun find-native-class (java-name)
   (let* ((n (subseq java-name 1 (1- (length java-name))))
@@ -403,34 +409,34 @@
               this
               args))
       (:invoke-virtual
-       (multiple-value-bind (s1 s2 class-name static)
+       (multiple-value-bind (s1 s2 class-name static private)
            (select-method-signature method class-name args)
+         (declare (ignorable s2))
          (setf class (gethash class-name (native-classes *compile-env*)))
          (setf sig s1)
          #++
          (when static
            (break "~s ~s ~s ~s~%" s1 s2 class-name static))
-         (let ((access (third
-                        (gethash s2 (gethash class-name (signatures method))))))
-           (apply #'asm
-                  (if static
-                      :invoke-static
-                      ;; special case constructor
-                      (if (eq name 'java/lang/object:<init>)
-                          :invoke-direct
-                          :invoke-virtual))
-                  (list* (java-type-string-for-class class)
-                         sig)
-                  this
-                  args)))))
+         (apply #'asm
+                (if static
+                    :invoke-static
+                    (if (or private
+                            ;; special case constructor
+                            (eq name 'java/lang/object:<init>))
+                        :invoke-direct
+                        :invoke-virtual))
+                (list* (java-type-string-for-class class)
+                       sig)
+                this
+                args))))
     (when (and (cleavir-ir:outputs ir)
                sig
                (cleavir-ir:using-instructions (first (cleavir-ir:outputs ir))))
       (let ((r (second (first sig)))
             (out (first (cleavir-ir:outputs ir))))
         (ecase (char r 0)
-          (#\V ;; void ret, do nothing
-           )
+          (#\V
+           (set-variable-type out :void))
           (#\L ;; object return
            (asm :move-result-object out)
            ;; and set type so we can do casts if needed before using
@@ -439,7 +445,8 @@
                     r (get-variable-type out)))
            (set-variable-type out (find-native-class r)))
           (#\I ;; int return
-           (asm :move-result (first (cleavir-ir:outputs ir)))))))
+           (set-variable-type out '(signed-byte 32))
+           (asm :move-result out)))))
 
     (hir-to-dalvik (car (cleavir-ir:successors ir)))))
 
@@ -479,38 +486,41 @@
 
 (defun make-move-op (dest src vt)
   (etypecase vt
-    ((and symbol (not null))
-     (list :move-object dest src))))
+    ((and symbol
+          (not (member :void nil)))
+     (format t "  move-object ~s~%" vt)
+     (list :move-object dest src))
+    ((eql :void)
+     ;; can't move a void...
+     ;; fixme: filter out earlier
+     )))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:fixed-to-multiple-instruction))
-  (when (and (cleavir-ir:inputs ir)
-             (cleavir-ir:outputs ir))
-    #++(break "ftm")
-    (use-variables :f-t-m (list (car (cleavir-ir:inputs ir))))
-    (use-variables :f-t-m (list (car (cleavir-ir:outputs ir))))
-    (let ((vt (get-variable-type (car (cleavir-ir:inputs ir)))))
-      (assert vt)
-      (set-variable-type (car (cleavir-ir:outputs ir)) vt)
-      (apply #'asm (make-move-op (car (cleavir-ir:outputs ir))
-                                 (car (cleavir-ir:inputs ir))
-                                 vt))))
+  (let* ((src (car (cleavir-ir:inputs ir)))
+         (dst (car (cleavir-ir:outputs ir)))
+         (vt (get-variable-type src)))
+    (cond
+      ((and src dst vt
+            (not (eql (get-variable-type src) :void)))
+       (use-variables :f-t-m (list src dst))
+       (set-variable-type dst vt)
+       (apply #'asm (make-move-op dst src vt)))
+      ((and src dst vt)
+       (set-variable-type dst vt))))
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:multiple-to-fixed-instruction))
-  #++
-  (when (cleavir-ir:outputs ir)
-    (break "todo: multiple-to-fixed-instruction not implemented yet"))
-  (when (and (cleavir-ir:inputs ir)
-             (cleavir-ir:outputs ir))
-    #++(break "mtf")
-    (use-variables :m-t-f (list (car (cleavir-ir:inputs ir))))
-    (use-variables :m-t-f (list (car (cleavir-ir:outputs ir))))
-    (let ((vt (get-variable-type (car (cleavir-ir:inputs ir)))))
-      (assert vt)
-      (set-variable-type (car (cleavir-ir:outputs ir)) vt)
-      (apply #'asm (make-move-op (car (cleavir-ir:outputs ir))
-                                 (car (cleavir-ir:inputs ir))
-                                 vt))))
+  (let* ((src (car (cleavir-ir:inputs ir)))
+         (dst (car (cleavir-ir:outputs ir)))
+         (vt (get-variable-type src)))
+    (cond
+      ((and src dst vt
+            (not (eql (get-variable-type src) :void)))
+       (use-variables :m-t-f (list src dst))
+       (set-variable-type dst vt)
+       (apply #'asm (make-move-op dst src vt)))
+      ((and src dst vt)
+       (set-variable-type dst vt))))
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:nop-instruction))
@@ -564,16 +574,16 @@
 (defmethod hir-to-dalvik ((ir cleavir-ir:return-instruction))
   (let* ((v (car (cleavir-ir:inputs ir)))
          (d (cleavir-ir:defining-instructions v)))
-    (if (and (= 1 (length d))
-             (typep (car d) 'cleavir-ir:fixed-to-multiple-instruction)
-             (zerop (length (cleavir-ir:inputs (car d)))))
+    (if (or (eql :void *return-type*)
+            (eql :void (get-variable-type v))
+            (not (get-variable-type v)))
         (progn
           (assert (or (not *return-type*)
                       (eql *return-type* :void)))
           (setf *return-type* :void)
           (asm :return-void))
         (let ((type (get-variable-type v)))
-          (unless type
+          (when (or (not type) (eql type :void))
             (break "~s" v
                    *variable-type-info*
                    *variable-usage*))
