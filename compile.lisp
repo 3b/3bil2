@@ -24,6 +24,50 @@
            (or (not (cleavir-ast:form ast))
                (equalp ''nil (cleavir-ast:form ast))))))
 
+
+;; copied from cleavir-remove-useless-instructions:remove-useless-instructions
+;; since we need to keep some more things
+(defgeneric instruction-may-be-removed-p (instruction))
+
+(defmethod instruction-may-be-removed-p (instruction)
+  (and (= (length (cleavir-ir:successors instruction)) 1)
+       (loop for output in (cleavir-ir:outputs instruction)
+	     always (null (cleavir-ir:using-instructions output)))))
+
+(defmethod instruction-may-be-removed-p
+    ((instruction cleavir-ir:side-effect-mixin))
+  nil)
+
+(defmethod instruction-may-be-removed-p
+    ((instruction cleavir-ir:enter-instruction))
+  nil)
+
+(defmethod instruction-may-be-removed-p
+    ((instruction cleavir-ir:the-instruction))
+  nil)
+
+(defmethod instruction-may-be-removed-p
+    ((inst asm-instruction))
+  nil)
+(defmethod instruction-may-be-removed-p
+    ((instruction cleavir-ir:the-values-instruction))
+  nil)
+
+(defun remove-useless-instructions (initial-instruction)
+  (loop
+    do (cleavir-ir:reinitialize-data initial-instruction)
+       (let ((useless-instructions '()))
+	 (cleavir-ir:map-instructions-arbitrary-order
+	  (lambda (instruction)
+	    (when (instruction-may-be-removed-p instruction)
+              (format t "~&remove ~s~%" instruction)
+	      (push instruction useless-instructions)))
+	  initial-instruction)
+	 (when (null useless-instructions)
+	   (loop-finish))
+	 (mapc #'cleavir-ir:delete-instruction useless-instructions))))
+
+
 (defun compile-toplevel-1 (form &key env)
   (let* ((cleavir-generate-ast:*compiler* 'cl:compile)
          (sys (make-instance '3bil2))
@@ -41,7 +85,7 @@
       (cleavir-kildall-type-inference:infer-types hir env :prune t)
       (cleavir-hir-transformations:eliminate-typeq hir)
       (cleavir-hir-transformations:eliminate-superfluous-temporaries hir)
-      #++(cleavir-remove-useless-instructions:remove-useless-instructions hir)
+      (remove-useless-instructions hir)
       (cleavir-ir-graphviz:draw-flowchart hir "/tmp/hir2.dot")
       (list (multiple-value-list
              (compile-hir hir env
@@ -158,7 +202,7 @@
            :test 'equalp)))
     (loop for (m c sig access nil code) in methods
           for name = (field-name m)
-          for dcm = (destructuring-bind (&key asm regs args ret) code
+          for dcm = (destructuring-bind (&key asm regs args ret (outs 0)) code
                       (make-instance
                        '3b-dex::dex-class-method
                        :annotations nil
@@ -167,8 +211,7 @@
                                             :instructions asm
                                             :tries nil
                                             :ins (length args)
-                                            ;; fixme: what's correct value/meaning for :outs?
-                                            :outs (length args)
+                                            :outs (max outs (length args))
                                             :registers regs)
                        :flags access
                        :name (field-name m)

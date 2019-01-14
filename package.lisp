@@ -1,7 +1,9 @@
 (defpackage :3bil2
   (:use :cl)
   (:export
-
+   :defmethod-native
+   :defclass-native
+   :new
    ))
 
 (defpackage :3bil2-lir

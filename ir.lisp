@@ -141,7 +141,9 @@
          (let ((r (delete-duplicates (mapcar 'canonicalize-type (cdr a)))))
            (if (equal r (cdr a))
                a
-               (list* 'and r)))))))
+               (list* 'and r)))))
+    ((cons (eql signed-byte))
+     a)))
 
 (defmethod cleavir-cst-to-ast:process-parameter
     :around
@@ -215,7 +217,7 @@
 (defmethod cleavir-ast-to-hir:compile-ast ((ast binary-add-ast)
                                            context)
   (let ((temps (cleavir-ast-to-hir::make-temps (args ast))))
-    (cleavir-ast-to-hir::compile-arguments
+    (cleavir-ast-to-hir:compile-arguments
      (args ast)
      temps
      (make-instance 'add-instruction
@@ -223,6 +225,19 @@
                     :outputs (cleavir-ast-to-hir::results context)
                     :successors (cleavir-ast-to-hir::successors context))
      (cleavir-ast-to-hir::invocation context))))
+
+#++
+(defun compile-arguments (arguments temps successor invocation)
+  (loop with succ = successor
+	for arg in (reverse arguments)
+	for temp in (reverse temps)
+        do (format t "~&**~s -> ~s~%" arg temp)
+	do (setf succ (cleavir-ast-to-hir:compile-ast
+                       arg
+		       (cleavir-ast-to-hir:context `(,temp)
+					           `(,succ)
+					           invocation)))
+	finally (return succ)))
 
 (defmethod cleavir-ast-to-hir:compile-ast ((ast native-call-ast)
                                            context)
@@ -232,7 +247,7 @@
     (cleavir-ast-to-hir::assert-context ast context nil 1)
     (let* ((all-args (native-call-argument-asts ast))
            (temps (cleavir-ast-to-hir::make-temps all-args)))
-      (cleavir-ast-to-hir::compile-arguments
+      (cleavir-ast-to-hir:compile-arguments
        all-args
        temps
        ;; fixme: make values stuff work right:
@@ -321,3 +336,98 @@
       (cleavir-kildall:copy s succ variable from
           ()
           ((output (cleavir-kildall-type-inference::approximate-type s t)))))))
+
+
+(defclass asm-ast (cleavir-ast:ast)
+  ((code :initarg :code :reader asm-ast-code)
+   (result :initarg :result :reader asm-ast-result)))
+
+(cleavir-io:define-save-info asm-ast
+  (:code asm-ast-code))
+
+(defmethod cleavir-ast:children ((ast asm-ast))
+  (list (asm-ast-result ast)))
+
+(defmethod cleavir-cst-to-ast::convert-special ((head (eql '%asm))
+                                                form
+                                                env
+                                                (system 3bil2))
+  (let* ((asm (cst:rest form))
+         (ret (cst:first asm))
+         (ret1 (cst:raw ret)))
+    ;; if first element of body is a symbol, treat it as return value.
+    ;; otherwise treat it as asm and we don't return anything
+    (if (cst:consp ret)
+        (setf ret nil)
+        (setf asm (cst:rest asm)))
+    (when ret
+      (setf ret
+            (if (cleavir-env:variable-info env ret)
+                (cleavir-cst-to-ast::convert ret env system)
+                (cleavir-ast::make-lexical-ast ret1))))
+    (setf asm
+          (loop for (op . args) in (cst:raw asm)
+                ;; fixme: decide which arguments are actually 'evaluated'
+                ;; rather than just matching anything in env
+                collect
+                (cons op
+                      (loop for a in args
+                            when (cleavir-env:variable-info env a)
+                              collect (cleavir-env:identity
+                                       (cleavir-env:variable-info env a))
+                            else
+                              when (and ret (eql a ret1))
+                                collect ret
+                            else
+                              collect a))))
+    (make-instance 'asm-ast
+                   :code asm
+                   :result ret)))
+
+
+(defclass asm-instruction (cleavir-ir:instruction
+                           cleavir-ir:one-successor-mixin
+                           cleavir-ast:one-value-ast-mixin)
+  ((code :initarg :code :accessor code)))
+
+(defmethod cleavir-ir:clone-initargs append ((i asm-instruction))
+  (list :code (code i)))
+
+(defmethod cleavir-ast-to-hir:compile-ast ((ast asm-ast) context)
+  (let ((code
+          (loop for (op . args) in (asm-ast-code ast)
+                collect
+                (cons op
+                      (loop for a in args
+                            when (typep a 'cleavir-ast:ast)
+                            collect (cleavir-ast-to-hir::find-or-create-location
+                                     a)
+                            else collect a)))))
+    (format t "~&~%compile asm:~%  ~s~%-> ~s~%"
+            code
+            (cleavir-ast-to-hir::results context))
+    (if (typep (cleavir-ast-to-hir::results context)
+               'cleavir-ir:values-location)
+        (let* ((temp (cleavir-ir:new-temporary)))
+          (make-instance 'asm-instruction
+                         :code code
+                         :inputs nil
+                         :outputs (list temp)
+                         :successors
+                         (list
+                          (cleavir-ir:make-fixed-to-multiple-instruction
+                           (list temp)
+                           (cleavir-ast-to-hir::results context)
+                           (first
+                            (cleavir-ast-to-hir::successors context))))))
+        (make-instance 'asm-instruction
+                       :code code
+                       :inputs nil
+                       :outputs (cleavir-ast-to-hir::results context)
+                       :successors
+                       (list
+                        (cleavir-ir:make-assignment-instruction
+                         (cleavir-ast-to-hir::find-or-create-location
+                          (asm-ast-result ast))
+                         (car (cleavir-ast-to-hir::results context))
+                         (first (cleavir-ast-to-hir::successors context))))))))

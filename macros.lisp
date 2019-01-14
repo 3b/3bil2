@@ -113,7 +113,7 @@
                                             collect name)))))
                        ,@body)))))))
       ;; todo: better structured return from compile-toplevel
-      (destructuring-bind ((asm args regs sig ret) ir ast) code
+      (destructuring-bind ((asm args regs sig ret outs) ir ast) code
         (declare (ignore ir ast))
         (let ((m (gethash name (native-methods *3bil2-environment*))))
           (unless m
@@ -134,5 +134,34 @@
                       (gethash this-type (native-classes *3bil2-environment*))))
           (setf (gethash sig (gethash this-type (signatures m)))
                 (list this-type sig visibility nil
-                      (list :asm asm :args args :regs regs :ret ret))))))
+                      (list :asm asm :args args :regs regs :ret ret
+                            :outs outs))))))
     nil))
+
+(defmacro/3bil2 new (class &rest arguments)
+  (let ((nc (gethash class (native-classes *3bil2-environment*))))
+    (unless nc
+      (error "tried to NEW unknown class ~s?" class))
+    (alexandria:with-gensyms (instance tmp)
+      `(let ((,instance (%asm
+                         ,tmp
+                         (:new-instance ,tmp
+                                        ,(java-type-string-for-class nc)))))
+         (java/lang/object:<init> ,instance ,@arguments)
+         (the ,class ,instance)))))
+
+
+;;; make them accessible from CL for slime C-c C-c use
+;; probably should do this automatically, but need to put them in a
+;; special package so we don't overwrite things like CL:DEFUN
+(defmacro defmethod-native (&whole w name lambda-list &body body)
+  (declare (ignorable name lambda-list body))
+  `(progn
+     (format t " compiling method ~s~%" ',name)
+     (compile-toplevel-1 ',w)))
+
+(defmacro defclass-native (&whole w name superclasses &body body)
+  (declare (ignorable name superclasses body))
+  `(progn
+     (format t " compiling class ~s~%" ',name)
+     (compile-toplevel-1 ',w)))

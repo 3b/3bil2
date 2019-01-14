@@ -67,7 +67,8 @@
 
 (defmethod extends ((x symbol))
   (let ((c (gethash x (native-classes *3bil2-environment*))))
-    (assert c)
+    (unless c
+      (error "class ~s not found" x))
     (when c
       (extends c))))
 
@@ -104,6 +105,20 @@
 (defmethod signatures-for-class (class (m native-method-function-info))
   nil)
 
+(defun find-class-by-java-name (s)
+  (when (and (> (length s) 2)
+             (char= #\L (aref s 0))
+             (char= #\; (aref s (1- (length s)))))
+    ;; fixme: add an index to avoid searching
+    (loop with n = (subseq s 1 (1- (length s)))
+          for c being the hash-values of (native-classes *3bil2-environment*)
+          when (string= n (java-name c))
+            return c)))
+
+(defmethod signatures-for-class ((s string) m)
+  (signatures-for-class (find-class-by-java-name s) m))
+
+
 (defmethod signatures-for-superclass ((class native-class)
                                       (m native-method-function-info))
   (loop for i in (list* (extends class) (implements class))
@@ -115,6 +130,10 @@
   (signatures-for-superclass
    (gethash class (native-classes *3bil2-environment*))
    m))
+
+(defmethod signatures-for-superclass ((class null)
+                                      (m native-method-function-info))
+  nil)
 
 (defmethod signatures-for-class ((class symbol)
                                  (m native-method-function-info))
@@ -166,7 +185,7 @@
            (make-instance 'cleavir-env:special-operator-info
                           :name name))
           ;; some hard-coded builtins
-          ((member name '(%set-slot-value slot-value +))
+          ((member name '(%asm %set-slot-value slot-value +))
            (make-instance 'cleavir-env:special-operator-info
                           :name name))
           ((member name '(eq error))

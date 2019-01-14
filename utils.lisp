@@ -107,7 +107,7 @@
                 (let ((s (make-hash-table)))
                   (loop for m in (public-methods class)
                         do (setf (gethash (cleavir-env:name m) s) t))
-                  (loop for f in (fields class)
+                  (loop for f in (coerce (fields class) 'list)
                         when (member :public (access f))
                           do (setf (gethash (name f) s) t))
                   (sort (mapcar 'string (alexandria:hash-table-keys s))
