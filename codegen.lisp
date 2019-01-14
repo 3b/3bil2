@@ -282,10 +282,12 @@
      var)))
 
 (defun java-type-string-for-variable (var)
-  (let ((type (get-type-for-variable var)))
-    (unless (and type (symbolp type))
-      (format t "couldn't find type for ~a?~%" var))
-    (java-type-string-for-class type)))
+  (let* ((type (get-type-for-variable var))
+         (typestring (when type
+                       (java-type-string-for-class type))))
+    (unless typestring
+      (format t "couldn't find type for ~s (~s)?" var type))
+    typestring))
 
 (defun simplified-signature (sig)
   (3b-dex::simplified-signature sig))
