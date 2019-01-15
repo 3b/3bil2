@@ -100,7 +100,8 @@
                     else collect i)))))
 
 (defmethod cpl-cache ((c symbol))
-  (cpl-cache (gethash c (native-classes *3bil2-environment*))))
+  (when c
+   (cpl-cache (gethash c (native-classes *3bil2-environment*)))))
 
 (defmethod signatures-for-class (class (m native-method-function-info))
   nil)

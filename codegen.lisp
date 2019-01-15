@@ -19,6 +19,8 @@
         (setf type (name nc)))))
   (format t "  set type ~s -> ~s~%"
           v type)
+  (when (equalp type '(and))
+    (break "and?"))
   (when (stringp type)
     (error "couldn't find class for type ~s?" type))
   #++
@@ -39,6 +41,82 @@
       (break "no type set for variable ~s?" v))
     r))
 
+
+(defparameter *typed-ops*
+  (alexandria:plist-hash-table
+   ;; x wide object bool
+   ;; byte char short
+   '(:move (:move :move-wide :move-object)
+     :return (:return :return-wide :return-object)
+     :aget (:aget :aget-wide :aget-object :aget-boolean
+            :aget-byte :aget-char :aget-short :aget-object)
+     :aput (:aput :aput-wide :aput-object :aput-boolean
+            :aput-byte :aput-char :aput-short :aput-object)
+     :iget (:iget :iget-wide :iget-object :iget-boolean
+            :iget-byte :iget-char :iget-short :iget-object)
+     :iput (:iput :iput-wide :iput-object :iput-boolean
+            :iput-byte :iput-char :iput-short :iput-object)
+     :sget (:sget :sget-wide :sget-object :sget-boolean
+            :sget-byte :sget-char :sget-short :sget-object)
+     :sput (:sput :sput-wide :sput-object :sput-boolean
+            :sput-byte :sput-char :sput-short :sput-object))))
+
+(defun op-type-for-type (type)
+  (etypecase type
+    ((cons (member signed-byte unsigned-byte))
+     (ecase (second type)
+       (32 0)
+       (64 1)
+       (8 4)
+       (16 6)))
+    ((eql single-float) 0)
+    ((eql double-float) 1)
+    ((eql boolean) 3)
+    ((eql character) 5)
+    (t 2)))
+
+(defun select-typed-op (op args)
+  (let ((alternatives (gethash op *typed-ops*)))
+    (format t "Select op ~s -> ~s~%" op alternatives)
+    (when alternatives
+      (case op
+        (:move
+         (let ((a (get-variable-type (first args))))
+           (break "move ~s (~a)~%" a args)
+           (setf op (or (elt alternatives (op-type-for-type a)) op))))
+        (:return
+          (let ((a (get-variable-type (first args))))
+            (setf op (or (elt alternatives (op-type-for-type a)) op))))
+        (:aput
+         (let* ((a (get-variable-type (second args)))
+                (new (elt alternatives (op-type-for-type (second a)))))
+           (format t ":aput ~s -> ~s" a new)
+           (setf op new)))
+        (:aget
+         (let* ((a (get-variable-type (second args)))
+                (new (elt alternatives (op-type-for-type (second a)))))
+           (format t ":aget ~s -> ~s" a new)
+           (setf op new)))
+        ((:sget :iget)
+         (break "todo ~s ~s" op args))
+        ((:sput :iput)
+         (break "todo ~s ~s" op args))
+        (:const
+         (let* ((new (typecase (second args)
+                       ((or (signed-byte 32)
+                            (unsigned-byte 32))
+                        :const)
+                       ((or (signed-byte 64)
+                            (unsigned-byte 64))
+                        :const-wide)
+                       (string
+                        :const-string))))
+           (format t ":const ~s -> ~s" (second args) new)
+           (setf op new))))))
+  op)
+
+(defparameter *nops* '(:nop :%declare-type))
+
 (defun asm (opcode &rest args)
   ;; track side effects of some ops
   (labels ((set-type (&optional type)
@@ -54,9 +132,24 @@
              (assert (eql (get-variable-type (second args)) t2))
              (when t3
                (assert (eql (get-variable-type (third args)) t3)))))
+    (setf opcode (select-typed-op opcode args))
     (case opcode
       ((:new-instance :const-class)
        (set-type))
+      ((:%declare-type)
+       (set-type))
+      ((:check-cast)
+       (set-type)
+       (when (symbolp (second args))
+         (setf args (list (first args)
+                          (java-type-string-for-class (second args))))))
+      ;; filled-new-array and filled-new-array/range don't have a 'dest' arg
+      ;; so need to set type manually on :copy-return
+      ((:new-array)
+       (format t "newarray ~s -> ~s~%"
+               opcode args)
+       (assert (char= #\[ (char (third args) 0)))
+       (set-type `(vector ,(subseq (third args) 1))))
       ((:move
         :move/from16 :move/16
         :move-wide :move-wide/from16 :move-wide/16
@@ -150,7 +243,14 @@
       ;; todo: figure out if we can do iget/iput here? currently
       ;; handled manually
       #++
-      ((:iget :iget-wide :iget-object :iget-boolean :iget-byte :iget-char :iget-short))
+      (:iget-object
+       ??)
+      (:iget (set-type '(signed-byte 32)))
+      (:iget-wide (set-type '(signed-byte 64)))
+      (:iget-boolean (set-type 'boolean))
+      (:iget-byte (set-type '(signed-byte 8)))
+      (:iget-char (set-type '(character)))
+      (:iget-short (set-type '(signed-byte 16)))
       #++
       ((:iput :iput-wide :iput-object :iput-boolean :iput-byte :iput-char :iput-short))
       #++
@@ -166,8 +266,8 @@
            (format t "~&*outs -> ~s~%" o)
            (setf *outs* o))))))
   (format t "~&assembled (~s~{ ~s~})~%" opcode args)
-
-  (push (cons opcode args) *current-code*))
+  (unless (member opcode *nops*)
+    (push (cons opcode args) *current-code*)))
 
 (defun use-variables (tag vars &key indexed)
   (loop for a in vars
@@ -209,7 +309,8 @@
        (let ((s (java-type-string-for-class type)))
          (if (char= (char s 0) #\L)
              (asm :check-cast input s)
-             (unless (string= s "I")
+             (unless (or (string= "I" s)
+                         (char= #\[ (char s 0)))
                (break "skipping check-cast for type ~s~%" s))))
        (set-variable-type input type))
       ((not old)
@@ -235,6 +336,12 @@
     ((cons (eql signed-byte))
      (ecase (second class)
        (32 "I")))
+    ((cons (eql vector))
+     (let ((c (second class)))
+       (format nil "[~a"
+               (if (stringp c)
+                   c
+                   (java-type-string-for-class c)))))
     ((or (signed-byte 32) (eql fixnum))
      "I")
     ((eql single-float)
@@ -244,7 +351,8 @@
     ((or symbol native-class)
      (let ((native-class
              (if (symbolp class)
-                 (gethash class (native-classes *compile-env*))
+                 (gethash class (native-classes (or *compile-env*
+                                                    *3bil2-environment*)))
                  class)))
        (unless native-class
          ;; print symbol in KEYWORD package to make sure we see full
@@ -299,7 +407,10 @@
           for i from 1 below (length sig)
           for c = (char sig i)
           until (char= c #\))
-          when (and (not skip) (char= c #\L))
+          when (and (not skip)
+                    (or (char= c #\L)
+                        (and (char= c #\[)
+                             (char= (char sig (1+ i)) #\L))))
             do (setf skip t)
                (push nil args)
           unless skip
@@ -440,10 +551,10 @@
           (#\L ;; object return
            (asm :move-result-object out)
            ;; and set type so we can do casts if needed before using
-           (when (get-variable-type out)
-             (break "return value: type info = ~s -> ~s~%"
-                    r (get-variable-type out)))
-           (set-variable-type out (find-native-class r)))
+           (if (get-variable-type out)
+               (break "return value: type info = ~s -> ~s~%"
+                      r (get-variable-type out))
+               (set-variable-type out (or (find-native-class r) r))))
           (#\I ;; int return
            (set-variable-type out '(signed-byte 32))
            (asm :move-result out)))))
@@ -490,6 +601,10 @@
           (not (member :void nil)))
      (format t "  move-object ~s~%" vt)
      (list :move-object dest src))
+    ((cons (eql vector))
+     (list :move-object dest src))
+    ((cons (eql signed-byte))
+     (list :move dest src))
     ((eql :void)
      ;; can't move a void...
      ;; fixme: filter out earlier
@@ -506,7 +621,10 @@
        (set-variable-type dst vt)
        (apply #'asm (make-move-op dst src vt)))
       ((and src dst vt)
-       (set-variable-type dst vt))))
+       (set-variable-type dst vt))
+      ((null (cleavir-ir:inputs ir))
+       (set-variable-type dst :void))
+      (t (break "ftm?" ir *variable-type-info*))))
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:multiple-to-fixed-instruction))
@@ -566,8 +684,10 @@
     (use-variables :read-slot (list object))
     (ecase (char (field-type slot) 0) ;; todo: other types
       (#\I
+       (set-variable-type out '(signed-byte 32))
        (asm :iget out object slot-id))
       (#\L
+       (set-variable-type out (field-type slot))
        (asm :iget-object out object slot-id))))
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
@@ -575,8 +695,7 @@
   (let* ((v (car (cleavir-ir:inputs ir)))
          (d (cleavir-ir:defining-instructions v)))
     (if (or (eql :void *return-type*)
-            (eql :void (get-variable-type v))
-            (not (get-variable-type v)))
+            (eql :void (get-variable-type v)))
         (progn
           (assert (or (not *return-type*)
                       (eql *return-type* :void)))
@@ -595,7 +714,12 @@
 
 (defmethod hir-to-dalvik ((ir asm-instruction))
   (use-variables :return (cleavir-ir:inputs ir) :indexed nil)
-  (loop for i in (code ir) do (apply 'asm i))
+  (loop with inputs = (cleavir-ir:inputs ir)
+        for i in (code ir)
+        do (apply 'asm (loop for a in i
+                             when (typep a 'asm-input)
+                               collect (elt inputs (index a))
+                             else collect a)))
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defvar *moves*
@@ -603,6 +727,7 @@
    '(:move (:move/from16 :move/16)
      :move-wide (:move-wide/from16 :move-wide/16)
      :move-object (:move-object/from16 :move-object/16))))
+
 (defun use-sized-op (asm)
   (print
    (let ((op (first asm)))
@@ -621,35 +746,52 @@
        ;; just return it
        (asm)))))
 
+(defun use-low-args (alloc inst &key (flags (make-list (1- (length inst))
+                                                       :initial-element t)))
+  (let ((op (car inst))
+        (moves nil)
+        (moves2 nil)
+        (args nil))
+    (assert (<= (length (cdr inst)) *outs*))
+    (loop with n = 0
+          for i in (cdr inst)
+          for flag in flags
+          for a = (gethash i alloc)
+          when (and flag a (>= a 16))
+            do (format t "making move: ~s <- ~s @ ~s (~s)~%"
+                       n a i (get-variable-type i))
+               (if (eq flag :out)
+                   (push (make-move-op a n (get-variable-type i))
+                         moves2)
+                   (push (make-move-op n a (get-variable-type i))
+                         moves))
+               (push n args)
+               (incf n)
+          else when a
+                 do (push a args)
+          else do (push i args))
+    (append
+     (nreverse moves)
+     (list (list* op (nreverse args)))
+     (nreverse moves2))))
+
 (defun use-regs (alloc code)
   (mapcar 'use-sized-op
           (loop for inst in code
                 for op = (car inst)
-                for args = nil
-                for moves = nil
-                when (member op '(:invoke-virtual :invoke-static
-                                  :invoke-super :invoke-direct
-                                  :invoke-interface))
-                  do (assert (<= (length (cdr inst)) *outs*))
-                     (loop for i in (cdr inst)
-                           for n from 0
-                           for a = (gethash i alloc)
-                           when (and a (>= a 16))
-                             do (format t "making move: ~s <- ~s @ ~s (~s)~%"
-                                        n a i (get-variable-type i))
-                                (push (make-move-op n a (get-variable-type i))
-                                      moves)
-                                (push n args)
-                           else when a
-                                  do (push a args)
-                           else do (push i args))
-                  and append (nreverse moves)
-                  and collect (list* op (nreverse args))
-                else
-                  collect (loop for i in inst
-                                when (gethash i alloc)
-                                  collect it
-                                else collect i))))
+                append
+                (case op
+                  ((:invoke-virtual :invoke-static
+                    :invoke-super :invoke-direct
+                    :invoke-interface)
+                   (use-low-args alloc inst))
+                  (:new-array
+                   (format t "^^^~%")
+                   (print (use-low-args alloc inst :flags '(:out t nil))))
+                  (t (list (loop for i in inst
+                                 when (gethash i alloc)
+                                   collect it
+                                 else collect i)))))))
 
 (defun regalloc (uses code)
   (let ((alloc (make-hash-table))

@@ -44,14 +44,14 @@
 
 (defmethod instruction-may-be-removed-p
     ((instruction cleavir-ir:the-instruction))
-  nil)
+  t)
 
 (defmethod instruction-may-be-removed-p
     ((inst asm-instruction))
   nil)
 (defmethod instruction-may-be-removed-p
     ((instruction cleavir-ir:the-values-instruction))
-  nil)
+  t)
 
 (defun remove-useless-instructions (initial-instruction)
   (loop
@@ -60,8 +60,7 @@
 	 (cleavir-ir:map-instructions-arbitrary-order
 	  (lambda (instruction)
 	    (when (instruction-may-be-removed-p instruction)
-              (format t "~&remove ~s~%" instruction)
-	      (push instruction useless-instructions)))
+              (push instruction useless-instructions)))
 	  initial-instruction)
 	 (when (null useless-instructions)
 	   (loop-finish))

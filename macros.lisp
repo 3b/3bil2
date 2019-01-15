@@ -101,8 +101,12 @@
                  (print
                   `(function
                     (lambda ,(mapcar 'first lambda-list)
-                     (declare ,@ (loop for (name type) in lambda-list
-                                       collect (list 'type type name)))
+                     (declare ,@(loop for (name type) in lambda-list
+                                      collect (list 'type type name)))
+                     (%asm
+                      ,@(loop for (name type) in lambda-list
+                              collect (list :%declare-type
+                                            name type)))
                      (macrolet
                          ((call-next-method (&rest a)
                             `(,',name
@@ -148,7 +152,36 @@
                          (:new-instance ,tmp
                                         ,(java-type-string-for-class nc)))))
          (java/lang/object:<init> ,instance ,@arguments)
-         (the ,class ,instance)))))
+         (%asm (:%declare-type ,instance ,class))
+         ,instance))))
+
+(defmacro/3bil2 %set-svref (value vector index)
+  (print
+   (alexandria:once-only (value index)
+     `(%asm
+       (:aput ,value ,vector ,index)))))
+
+(defmacro/3bil2 %vector (class &body contents)
+  (let ((nc (gethash class (native-classes *3bil2-environment*))))
+    (unless nc
+      (error "tried to create array of unknown class ~s?" class))
+    ;; for now just using :new-array and filling manually
+    (alexandria:with-gensyms (vec tmp l)
+      (print
+       `(let* ((,l ,(length contents))
+               (,vec (%asm
+                      ,tmp
+                      (:new-array ,tmp
+                                  ,l
+                                  ,(format nil "[~a"
+                                           (java-type-string-for-class nc))))))
+          (%asm
+           (:%declare-type ,vec (vector ,class)))
+          ,@(loop for c in contents
+                  for i from 0
+                  collect `(%set-svref ,c ,vec ,i)
+                  #++collect `(:aput ,c ,i ,vec))
+          ,vec)))))
 
 
 ;;; make them accessible from CL for slime C-c C-c use
