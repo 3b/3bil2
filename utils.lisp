@@ -8,7 +8,8 @@
                                       &key (extends 'java/lang:object)
                                         implements
                                         (copy-existing t)
-                                        (ids-file))
+                                        (ids-file)
+                                        define-r)
   (flet ((class-package-name (s)
            (format nil "~a/~a" (package-name (symbol-package s)) (string s)))
          (public-method-p (sigs)
@@ -31,13 +32,14 @@
            (containing-package (symbol-package class-name))
            (r (format nil "~a/R" (package-name (symbol-package class-name)))))
       `(progn
-         (defpackage ,r
-           (:use)
-           (:export ,@(when (find-package r)
-                        (let ((a nil))
-                          (do-external-symbols (x (find-package r))
-                            (push (symbol-name x) a))
-                          (sort a 'string<)))))
+         ,@(when define-r
+             `(defpackage ,r
+                (:use)
+                (:export ,@(when (find-package r)
+                             (let ((a nil))
+                               (do-external-symbols (x (find-package r))
+                                 (push (symbol-name x) a))
+                               (sort a 'string<))))))
          (defpackage ,(format nil "~a/~a"
                               (package-name (symbol-package class-name))
                               (string class-name))
