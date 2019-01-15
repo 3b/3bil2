@@ -85,6 +85,7 @@
       (cleavir-kildall-type-inference:infer-types hir env :prune t)
       (cleavir-hir-transformations:eliminate-typeq hir)
       (cleavir-hir-transformations:eliminate-superfluous-temporaries hir)
+      (cleavir-hir-transformations::eliminate-superfluous-values hir)
       (remove-useless-instructions hir)
       (cleavir-ir-graphviz:draw-flowchart hir "/tmp/hir2.dot")
       (list (multiple-value-list

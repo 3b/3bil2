@@ -8,6 +8,7 @@
                "cleavir-cst-to-ast")
   :serial t
   :components ((:file "ir")
+               (:file "eliminate-superfluous-value")
                (:file "codegen")
                (:file "compile")
                (:file "utils")
