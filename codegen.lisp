@@ -12,6 +12,18 @@
 (defmethod hir-to-dalvik :before (ir)
   (format t "compile ~s~%" ir))
 
+(defparameter *branch-stack* nil)
+
+(defmethod hir-to-dalvik :around (ir)
+  (if (and (> (length (cleavir-ir:predecessors ir)) 1)
+           (not (eql ir (car *branch-stack*))))
+      (progn
+        (format t "<<< ~s~%" ir)
+        (push ir (car *branch-stack*))
+        nil)
+      (call-next-method)))
+
+
 (defun set-variable-type (v type)
   (when (stringp type)
     (let ((nc (find-class-by-java-name type)))
@@ -61,6 +73,15 @@
      :sput (:sput :sput-wide :sput-object :sput-boolean
             :sput-byte :sput-char :sput-short :sput-object))))
 
+(defun op-type-for-type-char (type)
+  (ecase type
+    (#\I 0)   ;; int
+    (#\F 0)   ;; float
+    (#\D 1)   ;; double
+    (#\Z 3)   ;; bool
+    (#\C 5)   ;; char
+    (#\L 2))) ;; object
+
 (defun op-type-for-type (type)
   (etypecase type
     ((cons (member signed-byte unsigned-byte))
@@ -82,11 +103,11 @@
       (case op
         (:move
          (let ((a (get-variable-type (first args))))
-           (break "move ~s (~a)~%" a args)
-           (setf op (or (elt alternatives (op-type-for-type a)) op))))
+           #++(break "move ~s (~a)~%" a args)
+           (setf op (or (nth (op-type-for-type a) alternatives) op))))
         (:return
           (let ((a (get-variable-type (first args))))
-            (setf op (or (elt alternatives (op-type-for-type a)) op))))
+            (setf op (or (nth (op-type-for-type a) alternatives) op))))
         (:aput
          (let* ((a (get-variable-type (second args)))
                 (new (elt alternatives (op-type-for-type (second a)))))
@@ -97,10 +118,22 @@
                 (new (elt alternatives (op-type-for-type (second a)))))
            (format t ":aget ~s -> ~s" a new)
            (setf op new)))
-        ((:sget :iget)
+        ((:sget)
          (break "todo ~s ~s" op args))
-        ((:sput :iput)
+        (:iget
+         ;; args are dest, object, sig
+         (unless (third (third args))
+           (break "todo ~s ~s" op args))
+         (setf op (elt alternatives
+                       (op-type-for-type-char (char (third (third args)) 0)))))
+        (:sput
          (break "todo ~s ~s" op args))
+        (:iput
+         ;; args are value, object, sig
+         (unless (third (third args))
+           (break "todo ~s ~s" op args))
+         (setf op (elt alternatives
+                       (op-type-for-type-char (char (third (third args)) 0)))))
         (:const
          (let* ((new (typecase (second args)
                        ((or (signed-byte 32)
@@ -157,11 +190,12 @@
        (copy-type))
       #++
       ((:const-string :const-string/jumbo))
+      #++
       ((:if-eq
         :if-ne :if-lt :if-ge :if-gt :if-le
         :if-eqz :if-nez :if-ltz :if-gez :if-gtz :if-lez)
-       (set-type ;; fixme: correct type?
-        :boolean))
+       ;; ???
+       )
       ((:neg-int :not-int)
        (set/check '(signed-byte 32) '(signed-byte 32)))
       ((:neg-long :not-long)
@@ -240,11 +274,8 @@
         :rem-int/lit8 :and-int/lit8 :or-int/lit8 :xor-int/lit8
         :shr-int/lit8 :shl-int/lit8 :ushr-int/lit8)
        (set/check '(signed-byte 32) '(signed-byte 32)))
-      ;; todo: figure out if we can do iget/iput here? currently
-      ;; handled manually
-      #++
       (:iget-object
-       ??)
+       (set-type (third (third args))))
       (:iget (set-type '(signed-byte 32)))
       (:iget-wide (set-type '(signed-byte 64)))
       (:iget-boolean (set-type 'boolean))
@@ -267,6 +298,18 @@
            (setf *outs* o))))))
   (format t "~&assembled (~s~{ ~s~})~%" opcode args)
   (unless (member opcode *nops*)
+    (let ((desc (gethash opcode 3b-dex::*opcodes*)))
+      (use-variables
+       (list :auto opcode)
+       (loop for a in args
+             for rt in (getf desc :types)
+             when (eql :register
+                       (first (gethash rt 3b-dex::*register-arg-types*)))
+               do (unless (or (typep a 'cleavir-ir:lexical-location)
+                              (typep a 'cleavir-ir:values-location))
+                    (break "use ~s ~s?" a rt))
+                  (format t "$$~s: use ~s ~s~%" opcode rt a)
+               and collect a)))
     (push (cons opcode args) *current-code*)))
 
 (defun use-variables (tag vars &key indexed)
@@ -348,6 +391,8 @@
      "F")
     ((eql :void)
      "V")
+    ((eql boolean)
+     "Z")
     ((or symbol native-class)
      (let ((native-class
              (if (symbolp class)
@@ -445,24 +490,37 @@
   (let* ((signatures (signatures-for-class class method))
          (static nil)
          (match nil))
-    (unless signatures
-      (setf signatures (gethash (native-class method)
-                                (signatures method)))
-      (setf static t)
-      (setf args (cons class args)))
-
-    (setf match
-          (loop for s in (alexandria:hash-table-keys signatures)
-                when (match-signature args s)
-                  collect it))
-
-    (unless (= 1 (length match))
-      (format t "couldn't find signature match for ~s? ~s ~s~%"
-              (cleavir-env:name method)
-              nil
-              (when signatures
-                (alexandria:hash-table-keys signatures))))
-
+    (when signatures
+      (format t "check sigs1~%  ~s~%" (alexandria:hash-table-alist signatures))
+      (setf match
+            (loop for s in (alexandria:hash-table-keys signatures)
+                  when (match-signature args s)
+                    collect it)))
+    (unless match
+      (unless signatures
+        (format t "update sigs ~s -> ~s~%" class (native-class method))
+        (setf signatures (gethash (native-class method)
+                                  (signatures method))))
+      (format t "check sigs2~%  ~s~%"  (alexandria:hash-table-alist signatures))
+      (setf match
+            (loop with args = (cons class args)
+                  for s in (alexandria:hash-table-keys signatures)
+                  when (match-signature args s)
+                    collect it))
+      (when match
+        (setf static t)
+        (setf args (cons class args))))
+    (unless (and match                  ;(= 1 (length match))
+                 (first match))
+      (when match
+        (format t "got matches ~s?~%" match))
+      (break "couldn't find signature match for ~s~%@ ~s / ~s?~%~
+              arg types ~s~%sigs ~s~%"
+             (cleavir-env:name method)
+             class (native-class method)
+             (mapcar 'get-type-for-variable args)
+             (when signatures
+               (alexandria:hash-table-keys signatures))))
     (let ((ms (gethash (first (first match)) signatures)))
       (when static
         (assert (find :static (third ms))))
@@ -557,6 +615,9 @@
                (set-variable-type out (or (find-native-class r) r))))
           (#\I ;; int return
            (set-variable-type out '(signed-byte 32))
+           (asm :move-result out))
+          (#\Z ;; bool return
+           (set-variable-type out 'boolean)
            (asm :move-result out)))))
 
     (hir-to-dalvik (car (cleavir-ir:successors ir)))))
@@ -567,10 +628,15 @@
     (etypecase in
       (cleavir-ir:load-time-value-input
        (let* ((form (cleavir-ir:form in))
-              (v (if (consp form) (second form) form)))
+              (v (if (and (consp form) (eql (first form) 'quote))
+                     (second form)
+                     form)))
          (assert (typep form
                         '(or number (cons (eql quote) (cons number))
-                          string (cons (eql quote) (cons string)))))
+                          string
+                          (cons (eql quote) (cons string))
+                          (cons (eql quote) (cons (eql t)))
+                          (cons (eql quote) (cons (eql nil))))))
          (use-variables :assign (cleavir-ir:outputs ir)
                         :indexed t)
          (etypecase v
@@ -581,6 +647,10 @@
                 (asm :const out v)))
            ((or (signed-byte 64) (unsigned-byte 674) double-float)
             (asm :const-wide out v))
+           ((eql t)
+            (asm :const out 1))
+           ((eql nil)
+            (asm :const out 0))
            (string
             (asm :const-string out v)))
          (set-variable-type out
@@ -591,12 +661,18 @@
                                'java/lang:string)
                               ((typep v 'single-float)
                                'single-float)
+                              ((eql v t)
+                               'boolean)
+                              ((eql v nil)
+                               'boolean)
                               (t
                                (error "don't know how to determine type of ~s yet" v))))))))
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defun make-move-op (dest src vt)
   (etypecase vt
+    ((eql boolean)
+     (list :move dest src))
     ((and symbol
           (not (member :void nil)))
      (format t "  move-object ~s~%" vt)
@@ -624,7 +700,8 @@
        (set-variable-type dst vt))
       ((null (cleavir-ir:inputs ir))
        (set-variable-type dst :void))
-      (t (break "ftm?" ir *variable-type-info*))))
+      (t
+       (break "ftm?" ir *variable-type-info*))))
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:multiple-to-fixed-instruction))
@@ -644,6 +721,29 @@
 (defmethod hir-to-dalvik ((ir cleavir-ir:nop-instruction))
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
+(defmethod hir-to-dalvik ((ir cleavir-ir:eq-instruction))
+  (format t "```eq~%")
+  (let* ((in (cleavir-ir:inputs ir))
+         (true (gensym "if-eq-true"))
+         (end (gensym "if-eq-end"))
+         (*branch-stack* (cons (list end) *branch-stack*)))
+    (asm :if-eq (first in) (second in) true)
+    (format t "```false~%")
+    (hir-to-dalvik (second (cleavir-ir:successors ir)))
+    (asm :goto end)
+    (format t "```true~%")
+    (asm :label true)
+    (hir-to-dalvik (first (cleavir-ir:successors ir)))
+    (asm :label end)
+    (format t "``` < ~s~%" (car *branch-stack*))
+    (let ((e (first *branch-stack*)))
+      (assert (eq (length e) 3))
+      (assert (eq (first e) (second e)))
+      (assert (eq (third e) end))
+      ;; indicate we should actuall compile the merge instruction  now
+      (setf (first *branch-stack*) (first e))
+      (hir-to-dalvik (first e)))))
+
 (defmethod hir-to-dalvik ((ir add-instruction))
   (when (cleavir-ir:outputs ir)
     (assert (= 2 (length (cleavir-ir:inputs ir))))
@@ -658,37 +758,35 @@
          (value (second (cleavir-ir:inputs ir)))
          (class (gethash (get-variable-type object)
                          (native-classes *3bil2-environment*)))
-         (slot (find (slot-name ir) (fields class) :key 'name))
-         (slot-id (list (java-type-string-for-class class)
-                        (field-name slot)
-                        (field-type slot))))
-    (assert slot)
+         (slot (when class
+                 (find (slot-name ir) (fields class) :key 'name)))
+         (slot-id (when slot
+                    (list (java-type-string-for-class class)
+                          (field-name slot)
+                          (field-type slot)))))
+    (unless slot-id
+      (break"couldn't find slot ~s in class ~s~% ( object ~s)"
+            (slot-name ir) class object))
     (use-variables :write-slot (list value object))
-    (ecase (char (field-type slot) 0) ;; todo: other types
-      (#\I
-       (asm :iput value object slot-id))
-      (#\L
-       (asm :iput-object value object slot-id))))
+    (asm :iput value object slot-id))
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:slot-read-instruction))
   (let* ((object (first (cleavir-ir:inputs ir)))
          (class (gethash (gethash object *variable-type-info*)
                          (native-classes *3bil2-environment*)))
-         (slot (find (slot-name ir) (fields class) :key 'name))
-         (slot-id (list (java-type-string-for-class class)
-                        (field-name slot)
-                        (field-type slot)))
+         (slot (when class
+                 (find (slot-name ir) (fields class) :key 'name)))
+         (slot-id (when slot
+                    (list (java-type-string-for-class class)
+                          (field-name slot)
+                          (field-type slot))))
          (out (first (cleavir-ir:outputs ir))))
-    (assert slot)
+    (unless slot-id
+      (break "couldn't find slot ~s in class ~s~% ( object ~s)"
+             (slot-name ir) class object))
     (use-variables :read-slot (list object))
-    (ecase (char (field-type slot) 0) ;; todo: other types
-      (#\I
-       (set-variable-type out '(signed-byte 32))
-       (asm :iget out object slot-id))
-      (#\L
-       (set-variable-type out (field-type slot))
-       (asm :iget-object out object slot-id))))
+    (asm :iget out object slot-id))
   (hir-to-dalvik (car (cleavir-ir:successors ir))))
 
 (defmethod hir-to-dalvik ((ir cleavir-ir:return-instruction))
@@ -746,30 +844,37 @@
        ;; just return it
        (asm)))))
 
-(defun use-low-args (alloc inst &key (flags (make-list (1- (length inst))
-                                                       :initial-element t)))
+(defun use-low-args (alloc inst &key flags)
+  (declare (ignore flags))
   (let ((op (car inst))
         (moves nil)
         (moves2 nil)
         (args nil))
-    (assert (<= (length (cdr inst)) *outs*))
+    #++(assert (<= (length (cdr inst)) *outs*))
     (loop with n = 0
+          with outs = (3b-dex:get-op-out-registers op)
           for i in (cdr inst)
-          for flag in flags
+          for size in (3b-dex:get-op-register-sizes op)
+          for out = (pop outs)
           for a = (gethash i alloc)
-          when (and flag a (>= a 16))
+          when (and size a (> (integer-length a) size)
+                    (not (gethash op *moves*)))
             do (format t "making move: ~s <- ~s @ ~s (~s)~%"
                        n a i (get-variable-type i))
-               (if (eq flag :out)
+               (if out
                    (push (make-move-op a n (get-variable-type i))
                          moves2)
                    (push (make-move-op n a (get-variable-type i))
                          moves))
                (push n args)
                (incf n)
-          else when a
-                 do (push a args)
-          else do (push i args))
+          else do (push (or a i) args))
+    (unless (= (length args) (length (cdr inst)))
+      (break "inst ~s~% sizes ~s~% out ~s"
+             inst (3b-dex:get-op-register-sizes (car inst))
+             (3b-dex:get-op-out-registers (car inst))))
+    (when (or moves moves2)
+      (assert (not (alexandria:starts-with-subseq "MOVE" (symbol-name op)))))
     (append
      (nreverse moves)
      (list (list* op (nreverse args)))
@@ -780,18 +885,20 @@
           (loop for inst in code
                 for op = (car inst)
                 append
-                (case op
-                  ((:invoke-virtual :invoke-static
-                    :invoke-super :invoke-direct
-                    :invoke-interface)
-                   (use-low-args alloc inst))
-                  (:new-array
-                   (format t "^^^~%")
-                   (print (use-low-args alloc inst :flags '(:out t nil))))
-                  (t (list (loop for i in inst
-                                 when (gethash i alloc)
-                                   collect it
-                                 else collect i)))))))
+                (use-low-args alloc inst)
+                #++
+                 (case op
+                   ((:invoke-virtual :invoke-static
+                     :invoke-super :invoke-direct
+                     :invoke-interface)
+                    (use-low-args alloc inst))
+                   (:new-array
+                    (format t "^^^~%")
+                    (print (use-low-args alloc inst :flags '(:out t nil))))
+                   (t (list (loop for i in inst
+                                  when (gethash i alloc)
+                                    collect it
+                                  else collect i)))))))
 
 (defun regalloc (uses code)
   (let ((alloc (make-hash-table))
@@ -821,6 +928,8 @@
             (alexandria:alist-plist
              (sort (alexandria:hash-table-alist alloc)
                    '< :key 'cdr)))
+    (unless *return-type*
+      (break "no return type?"))
     (values
      (use-regs alloc code)
      (loop for (i) in (sort (copy-list args) '< :key 'second)

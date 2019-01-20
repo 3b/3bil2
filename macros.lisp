@@ -43,6 +43,11 @@
           direct-slots options)
   (let* ((super (or (first direct-superclasses)
                     'java/lang:object))
+         (jname
+           (substitute
+            #\_ #\-
+            (format nil "~(~a/~a~)" (package-name (symbol-package name))
+                    (symbol-name name))))
          (c (make-instance
              'native-class
              :access '(:public)
@@ -51,12 +56,7 @@
              :implements (cdr direct-superclasses)
              :methods (collect-inherited-methods name super)
              :fields nil
-             :java-name (print
-                         (substitute
-                          #\_ #\-
-                          (substitute #\/ #\:
-                                      (let ((*package* (find-package :keyword)))
-                                        (format nil "~(~s~)" name)))))
+             :java-name (print jname)
              :name name)))
     (setf (gethash name (native-classes *3bil2-environment*))
           c)
@@ -156,10 +156,19 @@
          ,instance))))
 
 (defmacro/3bil2 %set-svref (value vector index)
-  (print
-   (alexandria:once-only (value index)
-     `(%asm
-       (:aput ,value ,vector ,index)))))
+  (alexandria:once-only (value index)
+    `(%asm
+      (:aput ,value ,vector ,index))))
+
+(defmacro/3bil2 svref (vector index)
+  (alexandria:with-gensyms (result)
+    (alexandria:once-only (vector index)
+      `(progn
+         (%asm
+          ,result
+          (:aget ,result ,vector ,index))
+         )
+      )))
 
 (defmacro/3bil2 %vector (class &body contents)
   (let ((nc (gethash class (native-classes *3bil2-environment*))))
@@ -182,6 +191,30 @@
                   collect `(%set-svref ,c ,vec ,i)
                   #++collect `(:aput ,c ,i ,vec))
           ,vec)))))
+
+(defmacro/3bil2 the (type value)
+  (alexandria:once-only (value)
+    `(progn
+       (%asm
+        (:check-cast ,value ,type))
+       ,value)))
+
+(defmacro/3bil2 when (condition &body body)
+  `(if ,condition
+       (progn ,@body)
+       (values)))
+
+(defmacro/3bil2 eql (a b)
+ (alexandria:with-gensyms (result l)
+    (print
+     (alexandria:once-only (a b)
+       `(%asm
+         ,result
+         (:const ,result 1)
+         (:if-eq ,a ,b ,l)
+         (:const ,result 0)
+         (:label ,l)
+         )))))
 
 
 ;;; make them accessible from CL for slime C-c C-c use

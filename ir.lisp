@@ -369,7 +369,7 @@
         (setf asm (cst:rest asm)))
     (when ret
       (setf ret
-            (if (cleavir-env:variable-info env ret)
+            (if (cleavir-env:variable-info env (cst:raw ret))
                 (cleavir-cst-to-ast::convert ret env system)
                 (cleavir-ast::make-lexical-ast ret1))))
     (setf asm
@@ -379,9 +379,14 @@
                 collect
                 (cons op
                       (loop for a in args
-                            when (cleavir-env:variable-info env a)
-                              collect (cleavir-env:identity
-                                       (cleavir-env:variable-info env a))
+                            for info = (cleavir-env:variable-info env a)
+                            when info
+                              collect
+                              (etypecase info
+                                (cleavir-env:lexical-variable-info
+                                 (cleavir-env:identity info))
+                                (cleavir-env:constant-variable-info
+                                 (cleavir-env:value info)))
                             else
                               when (and ret (eql a ret1))
                                 collect ret
@@ -406,52 +411,64 @@
 (defmethod cleavir-ast-to-hir:compile-ast ((ast asm-ast) context)
   (let* ((%inputs (make-hash-table))
          (index 0)
-         (code
-           (loop for (op . args) in (asm-ast-code ast)
-                 collect
-                 (cons op
-                       (loop for a in args
-                             when (typep a 'cleavir-ast:ast)
-                               collect (let ((l (cleavir-ast-to-hir::find-or-create-location
-                                                 a)))
-                                         (unless (gethash l %inputs)
-                                           (setf (gethash l %inputs)
-                                                 (make-instance 'asm-input
-                                                                :index index))
-                                           (incf index))
-                                         (gethash l %inputs))
-                             else collect a))))
-         (inputs (mapcar 'car
-                         (sort (alexandria:hash-table-alist %inputs)
-                               '< :key (lambda (a) (index (cdr a)))))))
-    (format t "~&~%compile asm:~%  ~s~%-> ~s~%"
-            code
-            (cleavir-ast-to-hir::results context))
-    (if (typep (cleavir-ast-to-hir::results context)
-               'cleavir-ir:values-location)
-        (let* ((temp (cleavir-ir:new-temporary)))
-          (make-instance 'asm-instruction
-                         :code code
-                         :inputs inputs
-                         :outputs (list temp)
-                         :successors
-                         (list
-                          (cleavir-ir:make-fixed-to-multiple-instruction
-                           (list temp)
-                           (cleavir-ast-to-hir::results context)
-                           (first
-                            (cleavir-ast-to-hir::successors context))))))
-        (make-instance 'asm-instruction
-                       :code code
-                       :inputs inputs
-                       :outputs (cleavir-ast-to-hir::results context)
-                       :successors
-                       (if (null (asm-ast-result ast))
-                           (list
-                            (first (cleavir-ast-to-hir::successors context)))
-                           (list
-                            (cleavir-ir:make-assignment-instruction
-                             (cleavir-ast-to-hir::find-or-create-location
-                              (asm-ast-result ast))
-                             (car (cleavir-ast-to-hir::results context))
-                             (first (cleavir-ast-to-hir::successors context)))))))))
+         (ret (when (asm-ast-result ast)
+                (let ((l (cleavir-ast-to-hir::find-or-create-location
+                          (asm-ast-result ast))))
+                  (format t "~%r: ~s -> ~s" (asm-ast-result ast) l)
+                  #++ (setf (gethash l %inputs) l)
+                  l))))
+    (assert (= 1 (length (cleavir-ast-to-hir::successors context))))
+    (flet ((map-input (x)
+             (format t "~%map? ~s~%" x)
+             (if (typep x 'cleavir-ast:ast)
+                 #++(not (eql x (asm-ast-result ast)))
+                 (let ((l (cleavir-ast-to-hir::find-or-create-location
+                           x)))
+                   (unless (gethash l %inputs)
+                     (setf (gethash l %inputs)
+                           (make-instance 'asm-input :index index))
+                     (incf index))
+                   (format t "~%map ~s -> ~s" l (gethash l %inputs))
+                   (gethash l %inputs))
+                 x)))
+      (let ((code
+              (loop for (op . args) in (asm-ast-code ast)
+                    collect (cons op (mapcar #'map-input args))))
+            (inputs (mapcar 'car
+                            (sort (alexandria:hash-table-alist %inputs)
+                                  '< :key (lambda (a)
+                                            (if (typep (cdr a) 'asm-input)
+                                                (index (cdr a))
+                                                most-positive-fixnum))))))
+        (format t "~&~%compile asm:~%  ~s~%-> ~s~%"
+                code
+                (cleavir-ast-to-hir::results context))
+        (if (typep (cleavir-ast-to-hir::results context)
+                   'cleavir-ir:values-location)
+            (progn #++let* ((temp (cleavir-ir:new-temporary)))
+                   #++(break "doess this work? asm->values")
+                   (make-instance 'asm-instruction
+                                  :code code
+                                  :inputs inputs
+                                  :outputs (when ret (list ret))
+                                  :successors
+                                  (if (null ret)
+                                      (cleavir-ast-to-hir::successors context)
+                                      (list
+                                       (cleavir-ir:make-fixed-to-multiple-instruction
+                                        (list ret)
+                                        (cleavir-ast-to-hir::results context)
+                                        (first
+                                         (cleavir-ast-to-hir::successors context)))))))
+            (make-instance 'asm-instruction
+                           :code code
+                           :inputs inputs
+                           :outputs (cleavir-ast-to-hir::results context)
+                           :successors
+                           (if (null ret)
+                               (cleavir-ast-to-hir::successors context)
+                               (list
+                                (cleavir-ir:make-assignment-instruction
+                                 ret
+                                 (car (cleavir-ast-to-hir::results context))
+                                 (first (cleavir-ast-to-hir::successors context)))))))))))

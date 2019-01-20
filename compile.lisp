@@ -44,7 +44,7 @@
 
 (defmethod instruction-may-be-removed-p
     ((instruction cleavir-ir:the-instruction))
-  t)
+  nil)
 
 (defmethod instruction-may-be-removed-p
     ((inst asm-instruction))

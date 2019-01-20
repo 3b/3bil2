@@ -44,9 +44,9 @@
                     (when output
                       (= (length (cleavir-ir:defining-instructions output)) 1))
                     (when output
-                     (or (null (cleavir-ir:using-instructions output))
-                         (eq (gethash instruction owners)
-                             (gethash (car (cleavir-ir:using-instructions output)) owners))))
+                      (or (null (cleavir-ir:using-instructions output))
+                          (eq (gethash instruction owners)
+                              (gethash (car (cleavir-ir:using-instructions output)) owners))))
 		    (not (gethash output essential-locations))))))
        (when (and (typep instruction
 			 'cleavir-ir:multiple-to-fixed-instruction)
@@ -71,8 +71,9 @@
 	 (setf (gethash instruction superfluous-instructions) t)
          (let ((f-t-m (car (cleavir-ir:defining-instructions
                                (car (cleavir-ir:inputs instruction))))))
-	   (setf (gethash f-t-m superfluous-instructions) t)
-           (setf (gethash (car (cleavir-ir:inputs f-t-m)) essential-locations) t))
+	   (when f-t-m
+             (setf (gethash f-t-m superfluous-instructions) t)
+             (setf (gethash (car (cleavir-ir:inputs f-t-m)) essential-locations) t)))
 	 #++(setf (gethash (car (cleavir-ir:inputs instruction)) essential-locations) t)
 	 (setf (gethash (car (cleavir-ir:outputs instruction)) superfluous-locations) t)))
      initial-instruction)
@@ -90,5 +91,6 @@
     (cleavir-ir:set-predecessors initial-instruction)
     (cleavir-ir:reinitialize-data initial-instruction)
     (print (alexandria:hash-table-alist superfluous-instructions))
+    (print (alexandria:hash-table-alist superfluous-locations))
     ;; Return the number of instructions that were eliminated.
     (hash-table-count superfluous-instructions)))
